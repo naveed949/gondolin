@@ -11,6 +11,7 @@ All notable changes to Gondolin are documented here.
 - Add declarative invocation-scoped HTTP/TLS egress, redirect and resolution reauthorization, network evidence, and channel teardown. #6
 - Add invocation-bound destination credential projection with trusted host references, live rotation/revocation checks, safe lifecycle evidence, and current/historical value redaction. #7
 - Add concurrent profile isolation fixtures, authenticated execution identities, signed evidence v2, independent verification and teardown probes, exact runtime/policy qualification binding, and adversarial tamper detection. #8
+- Add fail-closed released AdaptiveSandbox conformance pinning, a public-seam qualification adapter, exact compatibility matrix, dishonest-backend report validation, and performance/security reporting. #9
 
 ## 0.12.0
 

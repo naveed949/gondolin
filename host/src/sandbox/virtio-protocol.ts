@@ -300,6 +300,10 @@ export type ExecRequest = {
       /** maximum simultaneous process-tree members */
       pids: number;
     };
+    /** private IPC namespace required before process launch */
+    isolate_ipc?: boolean;
+    /** empty device and ambient-socket mounts required before process launch */
+    isolate_devices?: boolean;
     /** working directory */
     cwd?: string;
     /** whether stdin messages will be sent */
@@ -497,6 +501,10 @@ export function buildExecRequest(
     cleaned.allowed_writable_paths = payload.allowed_writable_paths;
   if (payload.resource_limits !== undefined)
     cleaned.resource_limits = payload.resource_limits;
+  if (payload.isolate_ipc !== undefined)
+    cleaned.isolate_ipc = payload.isolate_ipc;
+  if (payload.isolate_devices !== undefined)
+    cleaned.isolate_devices = payload.isolate_devices;
   if (payload.cwd !== undefined) cleaned.cwd = payload.cwd;
   if (payload.stdin !== undefined) cleaned.stdin = payload.stdin;
   if (payload.pty !== undefined) cleaned.pty = payload.pty;

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "gondolin.adaptivesandbox-conformance-pin/v1",
+  "status": "unavailable",
+  "repository": "naveed949/AdaptiveSandbox",
+  "reason": "No released AdaptiveSandbox conformance bundle exists; compatibility must remain unverified until an exact release asset and SHA-256 are reviewed and pinned."
+}

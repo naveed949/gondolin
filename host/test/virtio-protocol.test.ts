@@ -152,6 +152,22 @@ test("virtio-protocol: buildExecRequest preserves explicit clean environment", (
   });
 });
 
+test("virtio-protocol: buildExecRequest preserves capability isolation", () => {
+  const req = buildExecRequest(7, {
+    cmd: "/bin/tool",
+    allowed_executables: ["/bin/tool"],
+    isolate_ipc: true,
+    isolate_devices: true,
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/bin/tool",
+    allowed_executables: ["/bin/tool"],
+    isolate_ipc: true,
+    isolate_devices: true,
+  });
+});
+
 test("virtio-protocol: buildStdinData and buildPtyResize shape", () => {
   const stdin = buildStdinData(1, Buffer.from("hi"));
   assert.deepEqual(stdin, {

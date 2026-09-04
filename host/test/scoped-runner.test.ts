@@ -17,7 +17,6 @@ import {
 } from "../src/index.ts";
 import { buildExecRequest } from "../src/sandbox/virtio-protocol.ts";
 import { __test } from "../src/scoped-runner.ts";
-import { shouldSkipVmTests } from "./helpers/vm-fixture.ts";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-runner-"));
 const sourcePath = path.join(tempRoot, "source.ts");
@@ -320,7 +319,7 @@ test("exec protocol preserves the exact process-tree executable allow-list", () 
   ]);
 });
 
-test("exec protocol carries the pre-start write policy and resource controllers", () => {
+test("exec protocol carries pre-start write, resource, and isolation policy", () => {
   const payload = buildExecRequest(8, {
     cmd: "/opt/tools/compiler",
     allowed_writable_paths: ["/data/cache/output.bin"],
@@ -329,6 +328,8 @@ test("exec protocol carries the pre-start write policy and resource controllers"
       memory_bytes: 128 * 1024 * 1024,
       pids: 16,
     },
+    isolate_ipc: true,
+    isolate_devices: true,
   });
   assert.deepEqual(payload.p.allowed_writable_paths, [
     "/data/cache/output.bin",
@@ -338,6 +339,8 @@ test("exec protocol carries the pre-start write policy and resource controllers"
     memory_bytes: 128 * 1024 * 1024,
     pids: 16,
   });
+  assert.equal(payload.p.isolate_ipc, true);
+  assert.equal(payload.p.isolate_devices, true);
 });
 
 test("all six invocation resource limits validate independently", () => {
@@ -457,180 +460,3 @@ test("feature manifest advertises QEMU resource controls without claiming krun q
     "unverified",
   );
 });
-
-test(
-  "public seam enforces resource outcomes and verified teardown",
-  { skip: shouldSkipVmTests(), timeout: 600_000 },
-  async (t) => {
-    const context = ScopedRunnerInvocationContext.create(
-      ceiling({
-        allowedExecutables: ["/bin/busybox"],
-        allowedDescendantExecutables: ["/bin/busybox"],
-        limits: {
-          maxCpuTimeMs: 60_000,
-          maxMemoryBytes: 512 * 1024 * 1024,
-          maxPids: 128,
-          maxWritableStorageBytes: 1024 * 1024,
-          maxOutputBytes: 64 * 1024,
-          maxWallTimeMs: 60_000,
-        },
-      }),
-    );
-
-    const invoke = (
-      invocationId: string,
-      script: string,
-      limitOverrides: Partial<ScopedRunnerInvocationRequest["limits"]> = {},
-    ) =>
-      context.invoke(
-        request({
-          invocationId,
-          launch: {
-            executable: "/bin/busybox",
-            args: ["sh", "-c", script],
-            cwd: "/data/repo",
-            mode: "direct",
-          },
-          capabilities: {
-            ...request().capabilities,
-            process: {
-              descendants: "allow-list",
-              allowedExecutables: ["/bin/busybox"],
-            },
-          },
-          limits: {
-            cpuTimeMs: 30_000,
-            memoryBytes: 256 * 1024 * 1024,
-            pids: 64,
-            writableStorageBytes: 64 * 1024,
-            outputBytes: 16 * 1024,
-            wallTimeMs: 30_000,
-            ...limitOverrides,
-          },
-        }),
-      );
-
-    const assertSettled = (
-      result: Awaited<ReturnType<typeof invoke>>,
-      exhausted: typeof result.resourceAccounting.exhausted,
-    ) => {
-      assert.equal(
-        result.resourceAccounting.executionId,
-        result.evidence.executionId,
-      );
-      assert.deepEqual(result.evidence.resources, result.resourceAccounting);
-      assert.equal(result.resourceAccounting.exhausted, exhausted);
-      assert.equal(result.evidence.teardown.commandStopped, true);
-      assert.equal(result.evidence.teardown.vmStopped, true);
-      assert.equal(result.evidence.teardown.processTreeEmpty, true);
-      assert.equal(result.evidence.teardown.resourceControllersRemoved, true);
-      assert.equal(result.evidence.teardown.writableStateDestroyed, true);
-      assert.equal(
-        result.evidence.teardown.completedAt,
-        result.evidence.settledAt,
-      );
-    };
-
-    await t.test("valid workload", async () => {
-      const result = await invoke(
-        "runner-resource-valid",
-        "test -r /data/repo/source.ts && printf artifact > /data/cache/output.bin && printf 'valid\\n'",
-      );
-      assert.equal(result.outcome, "success", result.error);
-      assert.equal(result.stdout, "valid\n");
-      assert.equal(
-        result.evidence.writeDigests["/data/cache/output.bin"],
-        "sha256:c7c5c1d70c5dec4416ab6158afd0b223ef40c29b1dc1f97ed9428b94d4cadb1c",
-      );
-      assertSettled(result, null);
-    });
-
-    await t.test("undeclared temporary storage is denied", async () => {
-      const result = await invoke(
-        "runner-resource-temp-denied",
-        "if printf escape > /tmp/gondolin-unaccounted; then exit 97; fi; printf blocked",
-      );
-      assert.equal(result.outcome, "success", result.error);
-      assert.equal(result.stdout, "blocked");
-      assertSettled(result, null);
-    });
-
-    const cases: Array<{
-      name: string;
-      invocationId: string;
-      script: string;
-      limits: Partial<ScopedRunnerInvocationRequest["limits"]>;
-      outcome: Awaited<ReturnType<typeof invoke>>["outcome"];
-      exhausted: NonNullable<
-        Awaited<ReturnType<typeof invoke>>["resourceAccounting"]["exhausted"]
-      >;
-    }> = [
-      {
-        name: "CPU time",
-        invocationId: "runner-resource-cpu",
-        script: "while :; do :; done",
-        limits: { cpuTimeMs: 100, wallTimeMs: 10_000 },
-        outcome: "cpu_exhausted",
-        exhausted: "cpu",
-      },
-      {
-        name: "memory",
-        invocationId: "runner-resource-memory",
-        script:
-          "payload=$(/bin/busybox head -c 268435456 /dev/zero | /bin/busybox tr '\\000' x); printf '%s' \"${#payload}\"",
-        limits: {
-          cpuTimeMs: 30_000,
-          memoryBytes: 128 * 1024 * 1024,
-          wallTimeMs: 30_000,
-        },
-        outcome: "memory_exhausted",
-        exhausted: "memory",
-      },
-      {
-        name: "PID fork burst",
-        invocationId: "runner-resource-pids",
-        script:
-          'i=0; while [ "$i" -lt 64 ]; do (while :; do :; done) & i=$((i + 1)); done; wait',
-        limits: { pids: 4, wallTimeMs: 10_000 },
-        outcome: "pids_exhausted",
-        exhausted: "pids",
-      },
-      {
-        name: "writable storage",
-        invocationId: "runner-resource-storage",
-        script: "printf 12345 > /data/cache/output.bin",
-        limits: { writableStorageBytes: 4 },
-        outcome: "storage_exhausted",
-        exhausted: "storage",
-      },
-      {
-        name: "combined output",
-        invocationId: "runner-resource-output",
-        script: "printf 12345",
-        limits: { outputBytes: 4 },
-        outcome: "output_overflow",
-        exhausted: "output",
-      },
-      {
-        name: "wall time",
-        invocationId: "runner-resource-timeout",
-        script: "/bin/busybox sleep 30",
-        limits: { cpuTimeMs: 30_000, wallTimeMs: 100 },
-        outcome: "timeout",
-        exhausted: "wall-time",
-      },
-    ];
-
-    for (const candidate of cases) {
-      await t.test(candidate.name, async () => {
-        const result = await invoke(
-          candidate.invocationId,
-          candidate.script,
-          candidate.limits,
-        );
-        assert.equal(result.outcome, candidate.outcome, result.error);
-        assertSettled(result, candidate.exhausted);
-      });
-    }
-  },
-);

@@ -35,7 +35,7 @@ export type ExecResourceUsage = {
   pidsPeak: number;
   /** Controller which caused termination */
   exhausted: "cpu" | "memory" | "pids" | null;
-  /** Whether the guest resource group was empty and removed */
+  /** Guest resource-group empty-and-removed state */
   resourceGroupRemoved: boolean;
 };
 
@@ -130,7 +130,7 @@ export type ExecOptions = {
   encoding?: BufferEncoding;
   /** abort signal */
   signal?: AbortSignal;
-  /** whether to execute with an empty environment instead of inheriting guest daemon state */
+  /** Empty environment selection instead of inherited guest daemon state */
   clearEnv?: boolean;
   /** exact absolute executable paths permitted for the entrypoint and descendants */
   allowedExecutables?: string[];
@@ -138,6 +138,10 @@ export type ExecOptions = {
   allowedWritablePaths?: string[];
   /** fail-closed guest resource controllers installed before launch */
   resourceLimits?: ExecResourceLimits;
+  /** isolate the process tree in a private Linux IPC namespace */
+  isolateIpc?: boolean;
+  /** hide guest device nodes and ambient runtime socket directories */
+  isolateDevices?: boolean;
 
   /** stdout handling (default: "buffer") */
   stdout?: ExecOutputMode;

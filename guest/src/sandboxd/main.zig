@@ -4,11 +4,14 @@ const protocol = sandboxd.protocol;
 const posix = sandboxd.posix;
 const file_requests = @import("file_requests.zig");
 const c = @cImport({
+    @cDefine("_GNU_SOURCE", "1");
     @cInclude("fcntl.h");
     @cInclude("limits.h");
     @cInclude("linux/landlock.h");
     @cInclude("pty.h");
+    @cInclude("sched.h");
     @cInclude("sys/prctl.h");
+    @cInclude("sys/mount.h");
     @cInclude("sys/stat.h");
     @cInclude("sys/syscall.h");
     @cInclude("unistd.h");
@@ -59,6 +62,8 @@ const OwnedExecRequest = struct {
     allowed_executables: []const []const u8,
     allowed_writable_paths: []const []const u8,
     resource_limits: ?protocol.ExecResourceLimits,
+    isolate_ipc: bool,
+    isolate_devices: bool,
     cwd: ?[]u8,
     stdin: bool,
     pty: bool,
@@ -224,6 +229,8 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         .allowed_executables = allowed_executables,
         .allowed_writable_paths = allowed_writable_paths,
         .resource_limits = req.resource_limits,
+        .isolate_ipc = req.isolate_ipc,
+        .isolate_devices = req.isolate_devices,
         .cwd = cwd,
         .stdin = req.stdin,
         .pty = req.pty,
@@ -691,9 +698,21 @@ fn execWorker(session: *ExecSession) void {
             error.ResourceStartGateMissing,
             error.ResourceStartGateClosed,
             => "resource_controller_unavailable",
+            error.NamespaceIsolationUnavailable =>
+            "namespace_isolation_unavailable",
+            error.CapabilityPolicyUnavailable =>
+            "capability_policy_unavailable",
             else => "exec_failed",
         };
-        const message: []const u8 = if (std.mem.eql(u8, code, "resource_controller_unavailable"))
+        const message: []const u8 = if (std.mem.eql(
+            u8,
+            code,
+            "namespace_isolation_unavailable",
+        ))
+            "required namespace isolation could not be installed before launch"
+        else if (std.mem.eql(u8, code, "capability_policy_unavailable"))
+            "required executable or writable policy could not be installed before launch"
+        else if (std.mem.eql(u8, code, "resource_controller_unavailable"))
             "required resource controllers could not be installed before launch"
         else
             "failed to execute";
@@ -738,6 +757,18 @@ fn runExecSession(session: *ExecSession) !void {
         posix.close(gate[0]);
         posix.close(gate[1]);
     };
+    const needs_setup_status = req.isolate_ipc or
+        req.isolate_devices or
+        req.allowed_executables.len > 0 or
+        req.allowed_writable_paths.len > 0;
+    var setup_gate: ?[2]posix.fd_t = if (needs_setup_status)
+        try posix.pipe2(.{ .CLOEXEC = true })
+    else
+        null;
+    errdefer if (setup_gate) |gate| {
+        posix.close(gate[0]);
+        posix.close(gate[1]);
+    };
 
     var stdout_fd: ?posix.fd_t = null;
     var stderr_fd: ?posix.fd_t = null;
@@ -759,11 +790,15 @@ fn runExecSession(session: *ExecSession) !void {
         pid = @intCast(forked);
         if (pid == 0) {
             awaitResourceStartGate(start_gate) catch posix.exit(126);
-            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
-                const msg = "executable policy failed\n";
-                _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+            applyNamespaceIsolation(req.isolate_ipc, req.isolate_devices) catch {
+                reportExecSetup(setup_gate, .namespace_failed);
                 posix.exit(126);
             };
+            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
+                reportExecSetup(setup_gate, .policy_failed);
+                posix.exit(126);
+            };
+            reportExecSetup(setup_gate, .ready);
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
             }
@@ -775,14 +810,20 @@ fn runExecSession(session: *ExecSession) !void {
             };
         }
 
-        try releaseResourceStartGate(&resource_group, &start_gate, pid);
-
         pty_master = @intCast(master);
-        stdout_fd = pty_master;
-        stdin_fd = pty_master;
         errdefer {
             if (pty_master) |fd| posix.close(fd);
         }
+
+        try releaseResourceStartGate(&resource_group, &start_gate, pid);
+        awaitExecSetup(&setup_gate) catch |err| {
+            _ = posix.kill(pid, posix.SIG.KILL) catch {};
+            _ = posix.waitpid(pid, 0);
+            return err;
+        };
+
+        stdout_fd = pty_master;
+        stdin_fd = pty_master;
     } else {
         stdout_pipe = try posix.pipe2(.{ .CLOEXEC = true });
         errdefer {
@@ -832,11 +873,16 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.close(stdin_pipe.?[1]);
             }
 
-            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
-                const msg = "executable policy failed\n";
-                _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+            applyNamespaceIsolation(req.isolate_ipc, req.isolate_devices) catch {
+                reportExecSetup(setup_gate, .namespace_failed);
                 posix.exit(126);
             };
+
+            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
+                reportExecSetup(setup_gate, .policy_failed);
+                posix.exit(126);
+            };
+            reportExecSetup(setup_gate, .ready);
 
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
@@ -849,6 +895,11 @@ fn runExecSession(session: *ExecSession) !void {
             };
         }
         try releaseResourceStartGate(&resource_group, &start_gate, pid);
+        awaitExecSetup(&setup_gate) catch |err| {
+            _ = posix.kill(pid, posix.SIG.KILL) catch {};
+            _ = posix.waitpid(pid, 0);
+            return err;
+        };
     }
 
     errdefer {
@@ -1316,6 +1367,38 @@ fn awaitResourceStartGate(gate: ?[2]posix.fd_t) !void {
     }
 }
 
+const ExecSetupStatus = enum(u8) {
+    ready = 1,
+    namespace_failed = 2,
+    policy_failed = 3,
+};
+
+fn reportExecSetup(gate: ?[2]posix.fd_t, status: ExecSetupStatus) void {
+    const fds = gate orelse return;
+    posix.close(fds[0]);
+    const payload: [1]u8 = .{@intFromEnum(status)};
+    _ = posix.write(fds[1], &payload) catch {};
+    posix.close(fds[1]);
+}
+
+fn awaitExecSetup(gate: *?[2]posix.fd_t) !void {
+    const fds = gate.* orelse return;
+    posix.close(fds[1]);
+    var payload: [1]u8 = undefined;
+    const length = posix.read(fds[0], &payload) catch 0;
+    posix.close(fds[0]);
+    gate.* = null;
+    if (length != 1) return error.CapabilityPolicyUnavailable;
+    switch (payload[0]) {
+        @intFromEnum(ExecSetupStatus.ready) => return,
+        @intFromEnum(ExecSetupStatus.namespace_failed) =>
+        return error.NamespaceIsolationUnavailable,
+        @intFromEnum(ExecSetupStatus.policy_failed) =>
+        return error.CapabilityPolicyUnavailable,
+        else => return error.CapabilityPolicyUnavailable,
+    }
+}
+
 fn releaseResourceStartGate(
     group: *?ResourceGroup,
     gate: *?[2]posix.fd_t,
@@ -1507,9 +1590,41 @@ fn parseControlInteger(contents: []const u8) u64 {
     return std.fmt.parseInt(u64, std.mem.trim(u8, contents, " \r\n\t"), 10) catch 0;
 }
 
+/// Install optional per-exec IPC and device mount namespaces before Landlock.
+fn applyNamespaceIsolation(isolate_ipc: bool, isolate_devices: bool) !void {
+    if (!isolate_ipc and !isolate_devices) return;
+
+    var flags: c_int = 0;
+    if (isolate_ipc) flags |= c.CLONE_NEWIPC;
+    if (isolate_devices) flags |= c.CLONE_NEWNS;
+    if (c.unshare(flags) != 0) return error.NamespaceIsolationUnavailable;
+
+    if (!isolate_devices) return;
+    if (c.mount(null, "/", null, c.MS_REC | c.MS_PRIVATE, null) != 0) {
+        return error.NamespaceIsolationUnavailable;
+    }
+    const isolated_mounts = [_][]const u8{ "/dev", "/run", "/tmp" };
+    for (isolated_mounts) |mount_path| {
+        const mount_path_z = try std.heap.page_allocator.dupeZ(u8, mount_path);
+        defer std.heap.page_allocator.free(mount_path_z);
+        if (c.mount(
+            "tmpfs",
+            mount_path_z.ptr,
+            "tmpfs",
+            c.MS_NOSUID | c.MS_NODEV | c.MS_NOEXEC,
+            "mode=000,size=4096",
+        ) != 0) return error.NamespaceIsolationUnavailable;
+    }
+}
+
 /// Install inherited Linux Landlock execute and exact-write allow-lists.
 fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []const []const u8) !void {
     if (executables.len == 0 and writable_paths.len == 0) return;
+
+    if (executables.len > 0) {
+        try makeRootTreeNoExec();
+        try makeRuntimeLibrariesExecutable();
+    }
 
     var ruleset_attr: c.struct_landlock_ruleset_attr = std.mem.zeroes(c.struct_landlock_ruleset_attr);
     // Scoped invocations expose only pre-created exact writable files.  Handle
@@ -1557,6 +1672,27 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
             return error.AliasedExecutable;
         }
 
+        // Landlock identifies objects by inode, so it cannot distinguish an
+        // admitted file from a symlink alias to the same file.  A private
+        // noexec root plus an exact executable bind mount supplies the path
+        // distinction; Landlock remains the inherited complete-tree policy.
+        if (c.mount(
+            executable_z.ptr,
+            executable_z.ptr,
+            null,
+            c.MS_BIND,
+            null,
+        ) != 0) {
+            return error.ExecutableMountPolicyUnavailable;
+        }
+        if (c.mount(
+            null,
+            executable_z.ptr,
+            null,
+            c.MS_BIND | c.MS_REMOUNT | c.MS_RDONLY | c.MS_NOSUID | c.MS_NODEV,
+            null,
+        ) != 0) return error.ExecutableMountPolicyUnavailable;
+
         var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
         path_attr.allowed_access = c.LANDLOCK_ACCESS_FS_EXECUTE;
         path_attr.parent_fd = executable_fd;
@@ -1599,6 +1735,46 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
     }
     if (c.syscall(c.SYS_landlock_restrict_self, ruleset_fd, 0) < 0) {
         return error.LandlockRestrictFailed;
+    }
+}
+
+/// Create a private root view where only later exact-file binds are executable.
+fn makeRootTreeNoExec() !void {
+    if (c.unshare(c.CLONE_NEWNS) != 0) {
+        return error.ExecutableMountPolicyUnavailable;
+    }
+    if (c.mount(null, "/", null, c.MS_REC | c.MS_PRIVATE, null) != 0) {
+        return error.ExecutableMountPolicyUnavailable;
+    }
+    if (c.mount("/", "/", null, c.MS_BIND | c.MS_REC, null) != 0) {
+        return error.ExecutableMountPolicyUnavailable;
+    }
+    if (c.mount(
+        null,
+        "/",
+        null,
+        c.MS_BIND | c.MS_REMOUNT | c.MS_RDONLY | c.MS_NOEXEC | c.MS_NOSUID | c.MS_NODEV,
+        null,
+    ) != 0) return error.ExecutableMountPolicyUnavailable;
+}
+
+/// Restore executable mappings for runtime libraries without granting execve.
+fn makeRuntimeLibrariesExecutable() !void {
+    const library_paths = [_][]const u8{ "/lib", "/usr/lib" };
+    for (library_paths) |library_path| {
+        const path_z = try std.heap.page_allocator.dupeZ(u8, library_path);
+        defer std.heap.page_allocator.free(path_z);
+        if (c.access(path_z.ptr, c.F_OK) != 0) continue;
+        if (c.mount(path_z.ptr, path_z.ptr, null, c.MS_BIND | c.MS_REC, null) != 0) {
+            return error.ExecutableMountPolicyUnavailable;
+        }
+        if (c.mount(
+            null,
+            path_z.ptr,
+            null,
+            c.MS_BIND | c.MS_REMOUNT | c.MS_RDONLY | c.MS_NOSUID | c.MS_NODEV,
+            null,
+        ) != 0) return error.ExecutableMountPolicyUnavailable;
     }
 }
 

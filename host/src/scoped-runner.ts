@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { Writable } from "node:stream";
 
 import {
   CAPABILITY_CEILING_SCHEMA_VERSION,
@@ -21,6 +20,7 @@ import { MemoryProvider } from "./vfs/node/index.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import type { VfsHookContext } from "./vfs/provider.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
+import { BoundedOutput } from "./bounded-output.ts";
 import {
   AuthenticatedExecutionIdentity,
   capabilityQualificationId,
@@ -65,7 +65,7 @@ export type ScopedRunnerCeiling = {
   allowedExecutables: string[];
   /** Absolute guest descendant executables permitted by the ceiling */
   allowedDescendantExecutables: string[];
-  /** Whether shell-mode launches may be requested */
+  /** Shell-mode launch availability */
   allowShell: boolean;
   /** Absolute guest working directories permitted by the ceiling */
   allowedWorkingDirectories: string[];
@@ -180,7 +180,14 @@ export type ScopedRunnerFilesystemEffect = AuthenticatedEvidenceEvent & {
 
 export type ScopedRunnerProcessEvent = AuthenticatedEvidenceEvent & {
   domain: "process" | "lifecycle";
-  kind: "start" | "policy" | "signal" | "exit" | "teardown";
+  kind:
+    | "start"
+    | "policy"
+    | "descendant"
+    | "denial"
+    | "signal"
+    | "exit"
+    | "teardown";
   /** SHA-256 executable identity when applicable */
   executableId?: string;
   /** Non-sensitive host observation */
@@ -204,7 +211,7 @@ export type ScopedRunnerInvocationEvidence = {
   policyVersions: {
     admission: "scoped-runner/v1";
     filesystem: "exact-ephemeral-vfs/v1";
-    process: "landlock-exec/v1";
+    process: "exact-mount-landlock/v1";
     resources: "qemu-cgroup-vfs/v1";
     lifecycle: "one-shot-qemu/v1";
   };
@@ -221,13 +228,13 @@ export type ScopedRunnerInvocationEvidence = {
   startedAt: string;
   settledAt: string;
   teardown: CapabilityTeardownEvidence & {
-    /** Whether the disposable VM boundary proved the tree empty */
+    /** Disposable VM process-tree empty state */
     processTreeEmpty: boolean;
-    /** Whether the execution transport was closed */
+    /** Execution transport closure state */
     transportClosed: boolean;
-    /** Whether ephemeral writable resources were destroyed */
+    /** Ephemeral writable-resource destruction state */
     writableStateDestroyed: boolean;
-    /** Whether the empty guest cgroup was removed before settlement */
+    /** Empty guest-cgroup removal state before settlement */
     resourceControllersRemoved: boolean;
   };
   resultDigest: string;
@@ -279,7 +286,7 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
     output: "host-exec-channel";
     wallTime: "host-monotonic-clock";
   };
-  /** Whether sandboxd removed the empty guest cgroup */
+  /** Sandboxd empty guest-cgroup removal state */
   guestResourceGroupRemoved: boolean;
 };
 
@@ -557,7 +564,9 @@ export class ScopedRunnerInvocationContext {
       runtime = vm.getRuntimeIdentity();
       for (const feature of [
         "exec.clear-env/v1",
+        "exec.executable-mount-policy/v1",
         "exec.landlock-allowlist/v1",
+        "exec.namespace-isolation/v1",
         "exec.resource-limits/v1",
       ]) {
         if (!runtime.guestFeatures.includes(feature)) {
@@ -613,7 +622,7 @@ export class ScopedRunnerInvocationContext {
         domain: "process",
         kind: "start",
         executableId,
-        detail: "entrypoint launch dispatched to the guest execution channel",
+        detail: `host observed live QEMU process ${runnerPid} before entrypoint dispatch`,
         observedAt: new Date().toISOString(),
       });
 
@@ -637,6 +646,8 @@ export class ScopedRunnerInvocationContext {
             memoryBytes: request.limits.memoryBytes,
             pids: request.limits.pids,
           },
+          isolateIpc: true,
+          isolateDevices: true,
           signal: abort.signal,
           stdin: false,
           pty: false,
@@ -648,6 +659,33 @@ export class ScopedRunnerInvocationContext {
       commandStopped = true;
       exitCode = result.exitCode;
       guestUsage = result.resourceUsage;
+      if ((result.resourceUsage?.pidsPeak ?? 0) > 1) {
+        processEvents.push({
+          ...identity.authenticate(vmId),
+          domain: "process",
+          kind: "descendant",
+          detail: `guest cgroup observed a complete-tree peak of ${result.resourceUsage!.pidsPeak} processes`,
+          observedAt: new Date().toISOString(),
+        });
+      }
+      for (const effect of denied) {
+        processEvents.push({
+          ...identity.authenticate(vmId),
+          domain: "process",
+          kind: "denial",
+          detail: `host policy denied ${effect.operation} on ${effect.guestPath}`,
+          observedAt: new Date().toISOString(),
+        });
+      }
+      if (result.signal !== undefined) {
+        processEvents.push({
+          ...identity.authenticate(vmId),
+          domain: "process",
+          kind: "signal",
+          detail: `guest wait status observed signal ${result.signal}`,
+          observedAt: new Date().toISOString(),
+        });
+      }
       processEvents.push({
         ...identity.authenticate(vmId),
         domain: "process",
@@ -675,10 +713,10 @@ export class ScopedRunnerInvocationContext {
       if (caught instanceof CapabilityAdmissionError) {
         admissionError = caught;
         error = safeError(caught);
-      } else if (isMissingResourceControllerError(caught)) {
+      } else if (isMissingExecutionIsolationError(caught)) {
         admissionError = new CapabilityAdmissionError(
           "unsupported",
-          "required guest resource controllers are unavailable or degraded",
+          "required guest resource controllers or namespaces are unavailable or degraded",
         );
         error = safeError(admissionError);
       } else if (storage.exhausted) {
@@ -790,7 +828,8 @@ export class ScopedRunnerInvocationContext {
       processTreeEmpty: teardownComplete,
       transportClosed: teardownComplete,
       writableStateDestroyed: teardownComplete,
-      resourceControllersRemoved: teardownComplete,
+      resourceControllersRemoved:
+        teardownComplete && guestUsage?.resourceGroupRemoved === true,
       completedAt: teardownComplete ? settledAt : null,
     };
 
@@ -809,7 +848,7 @@ export class ScopedRunnerInvocationContext {
     const policyVersions = {
       admission: "scoped-runner/v1" as const,
       filesystem: "exact-ephemeral-vfs/v1" as const,
-      process: "landlock-exec/v1" as const,
+      process: "exact-mount-landlock/v1" as const,
       resources: "qemu-cgroup-vfs/v1" as const,
       lifecycle: "one-shot-qemu/v1" as const,
     };
@@ -864,57 +903,6 @@ type ResourcePolicy = {
   guestPath: string;
   operations: Set<string>;
 };
-
-class CollectingSink extends Writable {
-  readonly chunks: Buffer[] = [];
-  private readonly owner: BoundedOutput;
-  constructor(owner: BoundedOutput) {
-    super();
-    this.owner = owner;
-  }
-  override _write(
-    chunk: Buffer | string,
-    encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    this.owner.accept(
-      this,
-      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding),
-    );
-    callback();
-  }
-}
-
-class BoundedOutput {
-  readonly stdout = new CollectingSink(this);
-  readonly stderr = new CollectingSink(this);
-  overflowed = false;
-  private accepted = 0;
-  private readonly limit: number;
-  private readonly abort: AbortController;
-  constructor(limit: number, abort: AbortController) {
-    this.limit = limit;
-    this.abort = abort;
-  }
-  accept(sink: CollectingSink, data: Buffer): void {
-    const remaining = Math.max(0, this.limit - this.accepted);
-    if (remaining > 0) sink.chunks.push(data.subarray(0, remaining));
-    this.accepted += Math.min(remaining, data.length);
-    if (data.length > remaining && !this.overflowed) {
-      this.overflowed = true;
-      this.abort.abort();
-    }
-  }
-  get stdoutText(): string {
-    return Buffer.concat(this.stdout.chunks).toString("utf8");
-  }
-  get stderrText(): string {
-    return Buffer.concat(this.stderr.chunks).toString("utf8");
-  }
-  get acceptedBytes(): number {
-    return this.accepted;
-  }
-}
 
 class WritableStorageBudget {
   readonly limit: number;
@@ -1904,8 +1892,10 @@ function outcomeToExhausted(
   return null;
 }
 
-function isMissingResourceControllerError(error: unknown): boolean {
-  return /resource_controller_unavailable/.test(safeError(error));
+function isMissingExecutionIsolationError(error: unknown): boolean {
+  return /(resource_controller|namespace_isolation|capability_policy)_unavailable/.test(
+    safeError(error),
+  );
 }
 
 function unavailableRuntimeIdentity(): VmRuntimeIdentity {

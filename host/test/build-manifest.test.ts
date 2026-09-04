@@ -45,6 +45,8 @@ test("builder: writeAssetManifest includes krun checksums when krun assets exist
     assert.deepEqual(manifest.guestFeatures, [
       "exec.clear-env/v1",
       "exec.landlock-allowlist/v1",
+      "exec.executable-mount-policy/v1",
+      "exec.namespace-isolation/v1",
       "exec.resource-limits/v1",
     ]);
     assert.equal(

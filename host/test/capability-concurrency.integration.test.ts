@@ -26,7 +26,7 @@ import { shouldSkipVmTests } from "./helpers/vm-fixture.ts";
 
 test(
   "concurrent public invocations cannot union filesystem, runner, environment, network, or credential authority",
-  { skip: shouldSkipVmTests(), timeout: 360_000 },
+  { skip: shouldSkipVmTests(), timeout: 120_000 },
   async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-concurrent-"));
     const readerA = path.join(root, "reader-a.txt");
@@ -57,7 +57,7 @@ test(
       const readerContextA = CapabilityInvocationContext.create({
         schemaVersion: CAPABILITY_CEILING_SCHEMA_VERSION,
         profile: "exact-reader",
-        allowedExecutables: ["/bin/cat"],
+        allowedExecutables: ["/bin/busybox"],
         filesystem: {
           sourcePaths: [readerA],
           guestPaths: ["/data/input.txt"],
@@ -68,7 +68,7 @@ test(
       const readerContextB = CapabilityInvocationContext.create({
         schemaVersion: CAPABILITY_CEILING_SCHEMA_VERSION,
         profile: "exact-reader",
-        allowedExecutables: ["/bin/cat"],
+        allowedExecutables: ["/bin/busybox"],
         filesystem: {
           sourcePaths: [readerB],
           guestPaths: ["/data/input.txt"],
@@ -79,7 +79,7 @@ test(
       const writerContext = CapabilityInvocationContext.create({
         schemaVersion: CAPABILITY_CEILING_SCHEMA_VERSION,
         profile: "exact-writer",
-        allowedExecutables: ["/bin/sh"],
+        allowedExecutables: ["/bin/busybox"],
         filesystem: {
           targetPaths: [writerA, writerB],
           guestPaths: ["/data/output.txt"],
@@ -91,7 +91,7 @@ test(
       const runnerContext = ScopedRunnerInvocationContext.create({
         schemaVersion: CAPABILITY_CEILING_SCHEMA_VERSION,
         profile: "scoped-runner",
-        allowedExecutables: ["/bin/sh"],
+        allowedExecutables: ["/bin/busybox"],
         allowedDescendantExecutables: [],
         allowShell: true,
         allowedWorkingDirectories: ["/data"],
@@ -144,7 +144,7 @@ test(
         {
           schemaVersion: CAPABILITY_CEILING_SCHEMA_VERSION,
           profile: "exact-reader",
-          allowedExecutables: ["/bin/sh"],
+          allowedExecutables: ["/bin/busybox"],
           filesystem: {
             sourcePaths: [readerA],
             guestPaths: ["/data/input.txt"],
@@ -168,7 +168,10 @@ test(
         schemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
         invocationId,
         profile: "exact-reader",
-        launch: { executable: "/bin/cat", args: ["/data/input.txt"] },
+        launch: {
+          executable: "/bin/busybox",
+          args: ["cat", "/data/input.txt"],
+        },
         capabilities: {
           filesystem: {
             sourcePath,
@@ -190,8 +193,9 @@ test(
           invocationId: "concurrent-writer-a",
           profile: "exact-writer",
           launch: {
-            executable: "/bin/sh",
+            executable: "/bin/busybox",
             args: [
+              "sh",
               "-c",
               "printf writer-a-after > /data/output.txt; printf denied > /data/other.txt",
             ],
@@ -213,8 +217,8 @@ test(
           invocationId: "concurrent-writer-b",
           profile: "exact-writer",
           launch: {
-            executable: "/bin/sh",
-            args: ["-c", "printf writer-b-after > /data/output.txt"],
+            executable: "/bin/busybox",
+            args: ["sh", "-c", "printf writer-b-after > /data/output.txt"],
           },
           capabilities: {
             filesystem: {
@@ -233,8 +237,9 @@ test(
           invocationId: "concurrent-runner",
           profile: "scoped-runner",
           launch: {
-            executable: "/bin/sh",
+            executable: "/bin/busybox",
             args: [
+              "sh",
               "-c",
               'IFS= read -r source < /data/runner.txt; printf "%s:%s" "$RUN_ID" "$source"; printf runner-write > /data/runner-output.txt',
             ],
@@ -278,8 +283,9 @@ test(
         credentialContext.invoke({
           ...readerRequest("concurrent-credential", readerA),
           launch: {
-            executable: "/bin/sh",
+            executable: "/bin/busybox",
             args: [
+              "sh",
               "-c",
               `busybox wget -qO- --header="X-Api-Token: $API_TOKEN" http://127.0.0.1:${address.port}/credential`,
             ],

@@ -111,6 +111,37 @@ export {
   type ScopedRunnerResourceAccounting,
   type CanonicalScopedRunnerRequest,
 } from "./scoped-runner.ts";
+export {
+  ADAPTIVESANDBOX_PIN_SCHEMA_VERSION,
+  ADAPTIVESANDBOX_MATRIX_SCHEMA_VERSION,
+  ADAPTIVESANDBOX_REPORT_SCHEMA_VERSION,
+  REQUIRED_ADAPTIVESANDBOX_FIXTURE_CATEGORIES,
+  QUALIFICATION_LATENCY_PHASES,
+  parseAdaptiveSandboxConformancePin,
+  verifyAdaptiveSandboxBundle,
+  parseAdaptiveSandboxCompatibilityMatrix,
+  parseAdaptiveSandboxQualificationReport,
+  verifyQualificationInvocation,
+  verifyControlledExecutionLink,
+  summarizeQualificationSamples,
+  capabilityFeatureManifestDigest,
+  type AdaptiveSandboxFixtureCategory,
+  type QualificationLatencyPhase,
+  type QualificationStatus,
+  type AdaptiveSandboxUnavailablePin,
+  type AdaptiveSandboxReleasedPin,
+  type AdaptiveSandboxConformancePin,
+  type QemuQualificationIdentity,
+  type AdaptiveSandboxQualificationIdentity,
+  type PercentileSummary,
+  type WorkloadPerformanceSummary,
+  type QualificationReportSummary,
+  type AdaptiveSandboxCompatibilityRow,
+  type AdaptiveSandboxCompatibilityMatrix,
+  type QualificationFixtureResult,
+  type AdaptiveSandboxQualificationReport,
+  type QualificationSample,
+} from "./adaptivesandbox-conformance.ts";
 
 // Server for running the sandbox
 export { SandboxServer } from "./sandbox/server.ts";

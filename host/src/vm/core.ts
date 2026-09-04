@@ -1183,6 +1183,8 @@ fi
               pids: options.resourceLimits.pids,
             }
           : undefined,
+        isolate_ipc: options.isolateIpc ? true : undefined,
+        isolate_devices: options.isolateDevices ? true : undefined,
         cwd: options.cwd,
         stdin: session.stdinEnabled ? true : undefined,
         pty: options.pty ? true : undefined,

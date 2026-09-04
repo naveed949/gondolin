@@ -57,7 +57,7 @@ pub const ExecResourceUsage = struct {
     pids_peak: u64,
     /// controller which caused termination
     exhausted: ?ExecResourceExhaustion,
-    /// whether the resource group was empty and removed
+    /// resource-group empty-and-removed state
     resource_group_removed: bool,
 };
 
@@ -70,7 +70,7 @@ pub const ExecRequest = struct {
     argv: []const []const u8,
     /// environment variables as `KEY=VALUE`
     env: []const []const u8,
-    /// whether to omit the sandbox daemon environment
+    /// empty environment selection instead of sandbox daemon inheritance
     clear_env: bool,
     /// exact executable paths permitted for the complete process tree
     allowed_executables: []const []const u8,
@@ -78,11 +78,15 @@ pub const ExecRequest = struct {
     allowed_writable_paths: []const []const u8,
     /// fail-closed complete-tree resource limits
     resource_limits: ?ExecResourceLimits,
+    /// private IPC namespace required before process launch
+    isolate_ipc: bool,
+    /// empty device and ambient-socket mounts required before process launch
+    isolate_devices: bool,
     /// working directory
     cwd: ?[]const u8,
-    /// whether stdin frames will be sent
+    /// stdin-frame availability
     stdin: bool,
-    /// whether to allocate a pty
+    /// pseudoterminal allocation state
     pty: bool,
     /// initial stdout credit window in `bytes`
     stdout_window: u32,
@@ -864,6 +868,16 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         clear_env = try expectBool(clear_env_val);
     }
 
+    var isolate_ipc = false;
+    if (cbor.getMapValue(payload, "isolate_ipc")) |isolate_ipc_val| {
+        isolate_ipc = try expectBool(isolate_ipc_val);
+    }
+
+    var isolate_devices = false;
+    if (cbor.getMapValue(payload, "isolate_devices")) |isolate_devices_val| {
+        isolate_devices = try expectBool(isolate_devices_val);
+    }
+
     var cwd: ?[]const u8 = null;
     if (cbor.getMapValue(payload, "cwd")) |cwd_val| {
         cwd = try expectText(cwd_val);
@@ -900,6 +914,8 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         .allowed_executables = allowed_executables,
         .allowed_writable_paths = allowed_writable_paths,
         .resource_limits = resource_limits,
+        .isolate_ipc = isolate_ipc,
+        .isolate_devices = isolate_devices,
         .cwd = cwd,
         .stdin = stdin_flag,
         .pty = pty_flag,

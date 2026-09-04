@@ -133,6 +133,8 @@ For custom kernels/initrds, provide an explicit `sandbox.imagePath` asset object
 
 - [Capability Invocation API](docs/capability-invocation.md) — versioned,
   fail-closed one-shot QEMU exact-reader, exact-writer, and scoped-runner profiles
+- [AdaptiveSandbox Conformance](docs/adaptivesandbox-conformance.md) —
+  integrity-pinned qualification process and exact compatibility matrix
 - [Introduction](https://earendil-works.github.io/gondolin/)
 - [CLI](https://earendil-works.github.io/gondolin/cli/)
 - [SDK](https://earendil-works.github.io/gondolin/sdk/)

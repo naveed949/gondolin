@@ -26,7 +26,7 @@ import {
 const context = CapabilityInvocationContext.create({
   schemaVersion: "gondolin.capability-ceiling/v1",
   profile: "exact-reader",
-  allowedExecutables: ["/bin/cat"],
+  allowedExecutables: ["/bin/busybox"],
   filesystem: {
     sourcePaths: ["/srv/inputs/report.txt"],
     guestPaths: ["/data/input.txt"],
@@ -53,7 +53,10 @@ const result = await context.invoke({
   schemaVersion: "gondolin.capability-invocation/v1",
   invocationId: "report-reader-001",
   profile: "exact-reader",
-  launch: { executable: "/bin/cat", args: ["/data/input.txt"] },
+  launch: {
+    executable: "/bin/busybox",
+    args: ["cat", "/data/input.txt"],
+  },
   capabilities: {
     filesystem: {
       sourcePath: "/srv/inputs/report.txt",
@@ -181,7 +184,7 @@ const context = CapabilityInvocationContext.create(
   {
     schemaVersion: "gondolin.capability-ceiling/v1",
     profile: "exact-reader",
-    allowedExecutables: ["/bin/sh"],
+    allowedExecutables: ["/bin/busybox"],
     filesystem: {
       sourcePaths: ["/srv/inputs/request.txt"],
       guestPaths: ["/data/input.txt"],
@@ -215,8 +218,9 @@ const result = await context.invoke({
   invocationId: "github-user-001",
   profile: "exact-reader",
   launch: {
-    executable: "/bin/sh",
+    executable: "/bin/busybox",
     args: [
+      "sh",
       "-c",
       'wget -qO- --header="Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user',
     ],
@@ -279,8 +283,16 @@ Teardown clears the mediator's placeholder table and reports
 WebSocket, query, body, and external broker credential transports remain
 unsupported.
 
-The selected image must declare `exec.clear-env/v1` in its bound asset manifest.
-Older images that do not advertise the guest-side clean-environment
+The selected image must declare `exec.clear-env/v1`,
+`exec.executable-mount-policy/v1`, and `exec.landlock-allowlist/v1` in its
+bound asset manifest. Exact-reader and
+exact-writer send the single admitted entrypoint as the complete-tree
+executable allow-list. A private noexec root view re-enables execution only on
+that exact file and the read-only runtime-library directories required by the
+ELF loader. Runtime libraries receive no Landlock `EXECUTE` rule, so they cannot
+be invoked directly; the exact-file mount prevents normal rootfs symlink aliases
+to the admitted inode from widening authority. Inherited Landlock rules deny
+every other executable for the complete tree. Older images that lack any
 implementation are rejected before the VM is started.
 
 Every admitted call creates a new QEMU VM and fresh execution identity. The
@@ -359,7 +371,7 @@ import {
 const context = CapabilityInvocationContext.create({
   schemaVersion: "gondolin.capability-ceiling/v1",
   profile: "exact-writer",
-  allowedExecutables: ["/bin/sh"],
+  allowedExecutables: ["/bin/busybox"],
   filesystem: {
     targetPaths: ["/srv/results/report.txt"],
     guestPaths: ["/data/output.txt"],
@@ -374,8 +386,8 @@ const result = await context.invoke({
   invocationId: "report-writer-001",
   profile: "exact-writer",
   launch: {
-    executable: "/bin/sh",
-    args: ["-c", "printf report > /data/output.txt"],
+    executable: "/bin/busybox",
+    args: ["sh", "-c", "printf report > /data/output.txt"],
   },
   capabilities: {
     filesystem: {
@@ -547,6 +559,19 @@ paths cannot become an unaccounted writable escape. The host VFS stops and
 tears down the VM before an exact-file write can cross
 `writableStorageBytes`.
 
+The request also requires `exec.namespace-isolation/v1`. Before Landlock is
+installed, sandboxd creates a private IPC namespace and a private mount
+namespace with empty, non-executable tmpfs mounts over `/dev`, `/run`, and
+`/tmp`. Failure to create any namespace or mount fails the exec closed. This is
+per capability exec and does not change ordinary `VM.exec` behavior.
+
+The memory contract is deliberately whole-microVM for this one-invocation
+profile. QEMU's `-m` value limits all guest RAM to the requested aligned
+ceiling, while the guest cgroup applies the same ceiling to the complete
+entrypoint process tree and reports `memory.peak`. No unrelated workload shares
+the disposable VM, so guest RAM and process-tree accounting jointly cover the
+only invocation; QEMU controller overhead is outside guest invocation memory.
+
 CPU, memory, PID, storage, output, and wall-time exhaustion return respectively
 `cpu_exhausted`, `memory_exhausted`, `pids_exhausted`, `storage_exhausted`,
 `output_overflow`, and `timeout`. `resourceAccounting` binds the contracted
@@ -565,3 +590,8 @@ This resource profile currently runs only on QEMU on Linux. libkrun remains
 `unverified`, Windows remains `unsupported`, and the general Linux host entry
 remains `unverified` until an exact released image, kernel, architecture, and
 conformance bundle combination passes the non-skipping qualification suite.
+
+See [AdaptiveSandbox Conformance](adaptivesandbox-conformance.md) for the
+released-artifact pin, public-seam adapter, compatibility matrix, required
+negative fixtures, and reporting rules. The current matrix makes no conformance
+claim because AdaptiveSandbox has not released a bundle to qualify.

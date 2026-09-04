@@ -1,0 +1,216 @@
+{
+  "schemaVersion": "gondolin.adaptivesandbox-compatibility-matrix/v1",
+  "generatedAt": "2026-09-04T00:00:00.000Z",
+  "source": {
+    "prd": "https://github.com/naveed949/gondolin/issues/1",
+    "ticket": "https://github.com/naveed949/gondolin/issues/9",
+    "pin": "conformance/adaptivesandbox-bundle.pin.json"
+  },
+  "reports": {
+    "not-run-no-released-bundle": {
+      "workloads": {
+        "exact-reader": {
+          "samples": 0,
+          "phases": {
+            "coldBootMs": { "samples": 0, "p50": null, "p95": null },
+            "invocationSetupMs": { "samples": 0, "p50": null, "p95": null },
+            "policyInstallationMs": { "samples": 0, "p50": null, "p95": null },
+            "executionMs": { "samples": 0, "p50": null, "p95": null },
+            "observationMs": { "samples": 0, "p50": null, "p95": null },
+            "verificationMs": { "samples": 0, "p50": null, "p95": null },
+            "teardownMs": { "samples": 0, "p50": null, "p95": null }
+          }
+        },
+        "exact-writer": {
+          "samples": 0,
+          "phases": {
+            "coldBootMs": { "samples": 0, "p50": null, "p95": null },
+            "invocationSetupMs": { "samples": 0, "p50": null, "p95": null },
+            "policyInstallationMs": { "samples": 0, "p50": null, "p95": null },
+            "executionMs": { "samples": 0, "p50": null, "p95": null },
+            "observationMs": { "samples": 0, "p50": null, "p95": null },
+            "verificationMs": { "samples": 0, "p50": null, "p95": null },
+            "teardownMs": { "samples": 0, "p50": null, "p95": null }
+          }
+        },
+        "scoped-runner": {
+          "samples": 0,
+          "phases": {
+            "coldBootMs": { "samples": 0, "p50": null, "p95": null },
+            "invocationSetupMs": { "samples": 0, "p50": null, "p95": null },
+            "policyInstallationMs": { "samples": 0, "p50": null, "p95": null },
+            "executionMs": { "samples": 0, "p50": null, "p95": null },
+            "observationMs": { "samples": 0, "p50": null, "p95": null },
+            "verificationMs": { "samples": 0, "p50": null, "p95": null },
+            "teardownMs": { "samples": 0, "p50": null, "p95": null }
+          }
+        }
+      },
+      "security": { "passed": 0, "failed": 0, "skipped": 15 },
+      "falseDenials": { "allowedFixtures": 0, "denied": 0, "rate": null }
+    }
+  },
+  "rows": [
+    {
+      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-linux-x64-x86_64",
+      "identity": {
+        "gondolinVersion": "0.12.0",
+        "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "featureManifestDigest": null,
+        "policyVersionsDigest": null,
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
+        "vmm": "qemu",
+        "qemu": null,
+        "guestImageDigest": null,
+        "guestKernelDigest": null,
+        "hostPlatform": "linux",
+        "hostArchitecture": "x64",
+        "guestArchitecture": "x86_64"
+      },
+      "status": "unverified",
+      "procedureGeneratedOperations": "unverified",
+      "reason": "No released integrity-pinned AdaptiveSandbox bundle, QEMU executable, image, or kernel combination has been qualified.",
+      "report": "not-run-no-released-bundle"
+    },
+    {
+      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-linux-arm64-aarch64",
+      "identity": {
+        "gondolinVersion": "0.12.0",
+        "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "featureManifestDigest": null,
+        "policyVersionsDigest": null,
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
+        "vmm": "qemu",
+        "qemu": null,
+        "guestImageDigest": null,
+        "guestKernelDigest": null,
+        "hostPlatform": "linux",
+        "hostArchitecture": "arm64",
+        "guestArchitecture": "aarch64"
+      },
+      "status": "unverified",
+      "procedureGeneratedOperations": "unverified",
+      "reason": "No released integrity-pinned AdaptiveSandbox bundle, QEMU executable, image, or kernel combination has been qualified.",
+      "report": "not-run-no-released-bundle"
+    },
+    {
+      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-darwin-arm64-aarch64",
+      "identity": {
+        "gondolinVersion": "0.12.0",
+        "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "featureManifestDigest": null,
+        "policyVersionsDigest": null,
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
+        "vmm": "qemu",
+        "qemu": null,
+        "guestImageDigest": null,
+        "guestKernelDigest": null,
+        "hostPlatform": "darwin",
+        "hostArchitecture": "arm64",
+        "guestArchitecture": "aarch64"
+      },
+      "status": "unverified",
+      "procedureGeneratedOperations": "unverified",
+      "reason": "macOS is a separate host qualification path and has no released bundle result.",
+      "report": "not-run-no-released-bundle"
+    },
+    {
+      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-darwin-x64-x86_64",
+      "identity": {
+        "gondolinVersion": "0.12.0",
+        "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "featureManifestDigest": null,
+        "policyVersionsDigest": null,
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
+        "vmm": "qemu",
+        "qemu": null,
+        "guestImageDigest": null,
+        "guestKernelDigest": null,
+        "hostPlatform": "darwin",
+        "hostArchitecture": "x64",
+        "guestArchitecture": "x86_64"
+      },
+      "status": "unverified",
+      "procedureGeneratedOperations": "unverified",
+      "reason": "macOS is a separate host qualification path and has no released bundle result.",
+      "report": "not-run-no-released-bundle"
+    },
+    {
+      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-win32-x64-x86_64",
+      "identity": {
+        "gondolinVersion": "0.12.0",
+        "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "featureManifestDigest": null,
+        "policyVersionsDigest": null,
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
+        "vmm": "qemu",
+        "qemu": null,
+        "guestImageDigest": null,
+        "guestKernelDigest": null,
+        "hostPlatform": "win32",
+        "hostArchitecture": "x64",
+        "guestArchitecture": "x86_64"
+      },
+      "status": "unsupported",
+      "procedureGeneratedOperations": "unverified",
+      "reason": "Windows host support is outside the initial qualification scope and is not equivalent to Linux or macOS.",
+      "report": "not-run-no-released-bundle"
+    },
+    {
+      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-krun-linux-x64-x86_64",
+      "identity": {
+        "gondolinVersion": "0.12.0",
+        "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "featureManifestDigest": null,
+        "policyVersionsDigest": null,
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
+        "vmm": "krun",
+        "qemu": null,
+        "guestImageDigest": null,
+        "guestKernelDigest": null,
+        "hostPlatform": "linux",
+        "hostArchitecture": "x64",
+        "guestArchitecture": "x86_64"
+      },
+      "status": "unverified",
+      "procedureGeneratedOperations": "unverified",
+      "reason": "Experimental libkrun has not passed the QEMU conformance suite and is not equivalent to QEMU.",
+      "report": "not-run-no-released-bundle"
+    },
+    {
+      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-krun-darwin-arm64-aarch64",
+      "identity": {
+        "gondolinVersion": "0.12.0",
+        "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "featureManifestDigest": null,
+        "policyVersionsDigest": null,
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
+        "vmm": "krun",
+        "qemu": null,
+        "guestImageDigest": null,
+        "guestKernelDigest": null,
+        "hostPlatform": "darwin",
+        "hostArchitecture": "arm64",
+        "guestArchitecture": "aarch64"
+      },
+      "status": "unverified",
+      "procedureGeneratedOperations": "unverified",
+      "reason": "Experimental libkrun has not passed the QEMU conformance suite and is not equivalent to QEMU.",
+      "report": "not-run-no-released-bundle"
+    }
+  ]
+}

@@ -2,7 +2,6 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { Writable } from "node:stream";
 import { domainToASCII } from "node:url";
 
 import { VM, type VmRuntimeIdentity } from "./vm/core.ts";
@@ -17,6 +16,7 @@ import { HttpRequestBlockedError } from "./http/utils.ts";
 import { MemoryProvider } from "./vfs/node/index.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
+import { BoundedOutput } from "./bounded-output.ts";
 import {
   CAPABILITY_EVIDENCE_SCHEMA_VERSION,
   CAPABILITY_FEATURE_SCHEMA_VERSION,
@@ -99,7 +99,11 @@ export type CapabilityNetworkRule = {
 };
 
 export type CapabilityNetworkAuthority =
-  "none" | { /** Exact HTTP/TLS authorities */ rules: CapabilityNetworkRule[] };
+  | "none"
+  | {
+      /** Exact HTTP/TLS authorities */
+      rules: CapabilityNetworkRule[];
+    };
 
 export type CapabilityCredentialValidity = {
   /** Earliest permitted redemption timestamp */
@@ -130,7 +134,8 @@ export type CapabilityCredentialProjection = {
 export type CapabilityCredentialAuthority =
   | "none"
   | {
-      /** Invocation-bound destination credential projections */ projections: CapabilityCredentialProjection[];
+      /** Invocation-bound destination credential projections */
+      projections: CapabilityCredentialProjection[];
     };
 
 export type TrustedCapabilityCredential = {
@@ -527,19 +532,19 @@ export type CapabilityTeardownEvidence = {
   executionId: string;
   /** Strictly increasing host-authored event sequence */
   sequence: number;
-  /** Whether the command transport has stopped */
+  /** Command transport stopped state */
   commandStopped: boolean;
-  /** Whether the disposable VM runner has stopped */
+  /** Disposable VM runner stopped state */
   vmStopped: boolean;
-  /** Whether host VFS handles are no longer reachable */
+  /** Host VFS handle revocation state */
   vfsHandlesRevoked: boolean;
-  /** Whether invocation policy has been removed */
+  /** Invocation policy removal state */
   policyRemoved: boolean;
-  /** Whether every invocation network channel has been closed */
+  /** Invocation network-channel closure state */
   networkChannelsClosed?: boolean;
-  /** Whether invocation credential projections can no longer be redeemed */
+  /** Invocation credential-projection revocation state */
   credentialProjectionsRevoked?: boolean;
-  /** Whether ephemeral VM state has been destroyed */
+  /** Ephemeral VM-state destruction state */
   ephemeralStateDestroyed: boolean;
   /** Teardown completion timestamp */
   completedAt: string | null;
@@ -566,7 +571,7 @@ export type CapabilityLifecycleEvent = AuthenticatedEvidenceEvent & {
   /** Host-observed event domain */
   domain: "process" | "lifecycle";
   /** Host-observed lifecycle transition */
-  kind: "start" | "signal" | "exit" | "teardown";
+  kind: "start" | "policy" | "signal" | "exit" | "teardown";
   /** Non-sensitive host observation */
   detail: string;
   /** Host observation timestamp */
@@ -602,6 +607,7 @@ export type CapabilityInvocationEvidence = {
   policyVersions: {
     admission: "exact-reader/v1" | "exact-writer/v1";
     filesystem: "snapshot-vfs/v1" | "exact-writer-vfs/v1";
+    process: "exact-mount-landlock/v1";
     network?: "http-tls-mediator/v1";
     credentials?: "destination-bound-credentials/v1";
     lifecycle: "one-shot-qemu/v1";
@@ -643,7 +649,7 @@ export type CapabilityInvocationResult = {
   stdout: string;
   /** Bounded stderr */
   stderr: string;
-  /** Whether output exceeded the admitted bound */
+  /** Admitted output-bound overflow state */
   outputTruncated: boolean;
   /** Host-authored invocation evidence */
   evidence: CapabilityInvocationEvidence;
@@ -1232,11 +1238,17 @@ export class CapabilityInvocationContext {
       vmId = vm.id;
       identity.bindVm(vmId);
       runtime = vm.getRuntimeIdentity();
-      if (!runtime.guestFeatures.includes("exec.clear-env/v1")) {
-        throw new CapabilityAdmissionError(
-          "unsupported",
-          "selected guest image does not declare exec.clear-env/v1",
-        );
+      for (const feature of [
+        "exec.clear-env/v1",
+        "exec.executable-mount-policy/v1",
+        "exec.landlock-allowlist/v1",
+      ]) {
+        if (!runtime.guestFeatures.includes(feature)) {
+          throw new CapabilityAdmissionError(
+            "unsupported",
+            `selected guest image does not declare ${feature}`,
+          );
+        }
       }
 
       await vm.start();
@@ -1248,6 +1260,13 @@ export class CapabilityInvocationContext {
       timer.unref?.();
 
       processEvents.push(
+        lifecycleEvent(
+          identity,
+          "policy",
+          "exact executable mount and inherited Landlock policy attached to exec request",
+        ),
+      );
+      processEvents.push(
         lifecycleEvent(identity, "start", "entrypoint launch dispatched"),
       );
       commandDispatched = true;
@@ -1255,6 +1274,7 @@ export class CapabilityInvocationContext {
         [request.launch.executable, ...request.launch.args],
         {
           clearEnv: true,
+          allowedExecutables: [request.launch.executable],
           env: credentialMediator?.environment,
           signal: abort.signal,
           stdin: false,
@@ -1283,6 +1303,12 @@ export class CapabilityInvocationContext {
       commandStopped = true;
       if (caught instanceof CapabilityAdmissionError) {
         admissionError = caught;
+        outcome = "transport_failure";
+      } else if (isMissingCapabilityPolicyError(caught)) {
+        admissionError = new CapabilityAdmissionError(
+          "unsupported",
+          "required guest executable policy or namespaces are unavailable",
+        );
         outcome = "transport_failure";
       } else if (output.overflowed) outcome = "output_overflow";
       else if (timedOut) outcome = "timeout";
@@ -1356,6 +1382,7 @@ export class CapabilityInvocationContext {
     const policyVersions = {
       admission: "exact-reader/v1" as const,
       filesystem: "snapshot-vfs/v1" as const,
+      process: "exact-mount-landlock/v1" as const,
       ...(networkEnabled ? { network: "http-tls-mediator/v1" as const } : {}),
       ...(credentialMediator
         ? { credentials: "destination-bound-credentials/v1" as const }
@@ -1501,11 +1528,17 @@ export class CapabilityInvocationContext {
       vmId = vm.id;
       identity.bindVm(vmId);
       runtime = vm.getRuntimeIdentity();
-      if (!runtime.guestFeatures.includes("exec.clear-env/v1")) {
-        throw new CapabilityAdmissionError(
-          "unsupported",
-          "selected guest image does not declare exec.clear-env/v1",
-        );
+      for (const feature of [
+        "exec.clear-env/v1",
+        "exec.executable-mount-policy/v1",
+        "exec.landlock-allowlist/v1",
+      ]) {
+        if (!runtime.guestFeatures.includes(feature)) {
+          throw new CapabilityAdmissionError(
+            "unsupported",
+            `selected guest image does not declare ${feature}`,
+          );
+        }
       }
 
       await vm.start();
@@ -1517,6 +1550,13 @@ export class CapabilityInvocationContext {
       timer.unref?.();
 
       processEvents.push(
+        lifecycleEvent(
+          identity,
+          "policy",
+          "exact executable mount and inherited Landlock policy attached to exec request",
+        ),
+      );
+      processEvents.push(
         lifecycleEvent(identity, "start", "entrypoint launch dispatched"),
       );
       commandDispatched = true;
@@ -1524,6 +1564,7 @@ export class CapabilityInvocationContext {
         [request.launch.executable, ...request.launch.args],
         {
           clearEnv: true,
+          allowedExecutables: [request.launch.executable],
           signal: abort.signal,
           stdin: false,
           pty: false,
@@ -1551,6 +1592,12 @@ export class CapabilityInvocationContext {
       commandStopped = true;
       if (caught instanceof CapabilityAdmissionError) {
         admissionError = caught;
+        outcome = "transport_failure";
+      } else if (isMissingCapabilityPolicyError(caught)) {
+        admissionError = new CapabilityAdmissionError(
+          "unsupported",
+          "required guest executable policy or namespaces are unavailable",
+        );
         outcome = "transport_failure";
       } else if (output.overflowed) outcome = "output_overflow";
       else if (timedOut) outcome = "timeout";
@@ -1640,6 +1687,7 @@ export class CapabilityInvocationContext {
     const policyVersions = {
       admission: "exact-writer/v1" as const,
       filesystem: "exact-writer-vfs/v1" as const,
+      process: "exact-mount-landlock/v1" as const,
       lifecycle: "one-shot-qemu/v1" as const,
     };
     const qualificationId = capabilityQualificationId({
@@ -1685,66 +1733,6 @@ export class CapabilityInvocationContext {
       ...resultWithoutEvidence,
       evidence,
     };
-  }
-}
-
-class CollectingSink extends Writable {
-  readonly chunks: Buffer[] = [];
-  private readonly owner: BoundedOutput;
-
-  constructor(owner: BoundedOutput) {
-    super();
-    this.owner = owner;
-  }
-
-  override _write(
-    chunk: Buffer | string,
-    encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void {
-    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
-    this.owner.accept(this, data);
-    callback();
-  }
-}
-
-class BoundedOutput {
-  readonly stdout: CollectingSink;
-  readonly stderr: CollectingSink;
-  overflowed = false;
-  private acceptedBytes = 0;
-  private readonly limit: number;
-  private readonly abort: AbortController;
-  private readonly redact: (value: string) => string;
-
-  constructor(
-    limit: number,
-    abort: AbortController,
-    redact: (value: string) => string = (value) => value,
-  ) {
-    this.limit = limit;
-    this.abort = abort;
-    this.redact = redact;
-    this.stdout = new CollectingSink(this);
-    this.stderr = new CollectingSink(this);
-  }
-
-  accept(sink: CollectingSink, data: Buffer): void {
-    const remaining = Math.max(0, this.limit - this.acceptedBytes);
-    if (remaining > 0) sink.chunks.push(data.subarray(0, remaining));
-    this.acceptedBytes += Math.min(remaining, data.length);
-    if (data.length > remaining && !this.overflowed) {
-      this.overflowed = true;
-      this.abort.abort();
-    }
-  }
-
-  get stdoutText(): string {
-    return this.redact(Buffer.concat(this.stdout.chunks).toString("utf8"));
-  }
-
-  get stderrText(): string {
-    return this.redact(Buffer.concat(this.stderr.chunks).toString("utf8"));
   }
 }
 
@@ -4140,7 +4128,10 @@ function lifecycleEvent(
 ): CapabilityLifecycleEvent {
   return {
     ...identity.authenticate(),
-    domain: kind === "start" || kind === "exit" ? "process" : "lifecycle",
+    domain:
+      kind === "start" || kind === "policy" || kind === "exit"
+        ? "process"
+        : "lifecycle",
     kind,
     detail,
     observedAt: new Date().toISOString(),
@@ -4170,6 +4161,12 @@ function safeError(
 ): string {
   const message = error instanceof Error ? error.message : String(error);
   return redact(message).slice(0, 512);
+}
+
+function isMissingCapabilityPolicyError(error: unknown): boolean {
+  return /(capability_policy|namespace_isolation)_unavailable/.test(
+    error instanceof Error ? error.message : String(error),
+  );
 }
 
 /** @internal */

@@ -1162,6 +1162,8 @@ export class SandboxServerOps {
       allowed_executables: message.allowed_executables ?? [],
       allowed_writable_paths: message.allowed_writable_paths ?? [],
       resource_limits: message.resource_limits,
+      isolate_ipc: message.isolate_ipc ?? false,
+      isolate_devices: message.isolate_devices ?? false,
       cwd: message.cwd,
       stdin: message.stdin ?? false,
       pty: message.pty ?? false,

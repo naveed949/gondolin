@@ -3,6 +3,9 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
+    "conformance:check": "node scripts/run-adaptivesandbox-conformance.mjs check",
+    "conformance:qualify": "node scripts/run-adaptivesandbox-conformance.mjs qualify",
+    "conformance:ci": "node scripts/run-adaptivesandbox-conformance.mjs qualify-if-pinned",
     "gondolin": "pnpm --filter @earendil-works/gondolin gondolin",
     "bash": "pnpm --filter @earendil-works/gondolin bash",
     "prepare:krun-runner-package": "node ./scripts/prepare-krun-runner-package.mjs"

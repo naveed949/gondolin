@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Verify AdaptiveSandbox pin and compatibility matrix
+        run: node scripts/run-adaptivesandbox-conformance.mjs qualify-if-pinned
+
       - name: Typecheck host
         run: pnpm --filter @earendil-works/gondolin exec tsc --noEmit
 

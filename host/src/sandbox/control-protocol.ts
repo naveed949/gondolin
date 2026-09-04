@@ -52,6 +52,10 @@ export type ExecCommandMessage = {
     /** maximum simultaneous process-tree members */
     pids: number;
   };
+  /** private IPC namespace required before process launch */
+  isolate_ipc?: boolean;
+  /** empty device and ambient-socket mounts required before process launch */
+  isolate_devices?: boolean;
   /** working directory */
   cwd?: string;
   /** whether stdin messages will be sent */
