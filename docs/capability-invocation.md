@@ -293,6 +293,46 @@ addresses are represented by SHA-256 identities, and request/response payloads
 are not retained. Evidence contains resource digests and guest paths, never host
 file contents or environment values.
 
+## Authenticated evidence and concurrent isolation
+
+Capability evidence version 2 authenticates every host-observed filesystem,
+network, credential, process, resource, and lifecycle record with the fresh
+execution identity and a strictly increasing execution-local sequence. The host
+identity lease is bound first to the canonical request and immutable ceiling,
+then to exactly one disposable VM. It accepts events only while active. A lease
+cannot be rebound, and completed or revoked identities remain rejected for a
+24-hour retention window.
+
+Every evidence payload records the Gondolin, request, evidence, feature-manifest,
+runtime, image, kernel, guest architecture, and policy identities which formed
+its exact qualification. It also records the final outcome and a digest of the
+public command result. The canonical payload is signed with an Ed25519 host key,
+so tampering, truncation, reordering, duplication, omission, cross-run splicing,
+and request, VM, backend, or result substitution fail verification.
+
+Use `getCapabilityEvidenceVerifierIdentity()` on the trusted controller and pin
+that returned key outside untrusted guest state. Pass it to
+`verifyCapabilityInvocationResult()` when evidence crosses a process or trust
+boundary. The verifier checks the signature, exact optional caller bindings,
+event identities and sequences, runtime/policy qualification, result digest,
+and the rule that `success` is impossible until every reported teardown gate is
+true. By default it trusts only the current controller process key; an embedded
+key alone is never accepted as proof of host authorship.
+
+`probeCapabilityInvocationTeardown()` is an independent process-local check of
+retained host execution state. It confirms that the identity is no longer
+active, that teardown was verified before completion, and that the retained
+request, ceiling, and VM bindings match the caller's expectations. The probe is
+not derived from the returned evidence object.
+
+Concurrent calls never install mutable VM-wide invocation policy. Exact readers,
+exact writers, scoped runners, network channels, and credential projections each
+receive their own VM, VFS/provider graph, environment, output sinks, process and
+resource boundary, HTTP connection pools, credential placeholder table, evidence
+recorder, and execution identity. Therefore simultaneous requests remain an
+intersection with their own canonical request and ceiling; they cannot combine
+their grants into a union.
+
 Use `getCapabilityInvocationFeatureManifest()` before requiring a feature. The
 manifest reports HTTP/1.x, TLS-mediated HTTP/1.x, checked host resolution,
 redirect reauthorization, internal-range handling, and synthetic DNS separately

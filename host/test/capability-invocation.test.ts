@@ -954,6 +954,8 @@ test(
       allowed.evidence.observed.some((effect) => effect.operation === "read"),
     );
     assert.deepEqual(allowed.evidence.teardown, {
+      executionId: allowed.evidence.executionId,
+      sequence: allowed.evidence.teardown.sequence,
       commandStopped: true,
       vmStopped: true,
       vfsHandlesRevoked: true,

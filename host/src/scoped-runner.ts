@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { Writable } from "node:stream";
 
 import {
   CAPABILITY_CEILING_SCHEMA_VERSION,
+  CAPABILITY_EVIDENCE_GUARANTEES,
   CAPABILITY_EVIDENCE_SCHEMA_VERSION,
   CAPABILITY_INVOCATION_SCHEMA_VERSION,
   CapabilityAdmissionError,
@@ -20,6 +21,15 @@ import { MemoryProvider } from "./vfs/node/index.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import type { VfsHookContext } from "./vfs/provider.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
+import {
+  AuthenticatedExecutionIdentity,
+  capabilityQualificationId,
+  capabilityResultDigest,
+  gondolinVersion,
+  sealCapabilityEvidence,
+  type AuthenticatedEvidenceEvent,
+  type CapabilityEvidenceIntegrity,
+} from "./invocation-evidence.ts";
 
 export const SCOPED_RUNNER_GUARANTEES = [
   "canonical-request",
@@ -42,6 +52,7 @@ export const SCOPED_RUNNER_GUARANTEES = [
   "per-invocation-pids",
   "per-invocation-storage",
   "completed-teardown",
+  ...CAPABILITY_EVIDENCE_GUARANTEES,
 ] as const;
 
 export type ScopedRunnerGuarantee = (typeof SCOPED_RUNNER_GUARANTEES)[number];
@@ -157,7 +168,7 @@ export type ScopedRunnerInvokeOptions = {
   signal?: AbortSignal;
 };
 
-export type ScopedRunnerFilesystemEffect = {
+export type ScopedRunnerFilesystemEffect = AuthenticatedEvidenceEvent & {
   domain: "filesystem";
   operation: "read" | "lookup" | "write" | "truncate" | "other";
   /** SHA-256 identity which does not expose a host path */
@@ -167,7 +178,7 @@ export type ScopedRunnerFilesystemEffect = {
   decision: "requested" | "granted" | "attempted" | "denied" | "observed";
 };
 
-export type ScopedRunnerProcessEvent = {
+export type ScopedRunnerProcessEvent = AuthenticatedEvidenceEvent & {
   domain: "process" | "lifecycle";
   kind: "start" | "policy" | "signal" | "exit" | "teardown";
   /** SHA-256 executable identity when applicable */
@@ -179,11 +190,17 @@ export type ScopedRunnerProcessEvent = {
 
 export type ScopedRunnerInvocationEvidence = {
   schemaVersion: typeof CAPABILITY_EVIDENCE_SCHEMA_VERSION;
+  capabilitySchemaVersion: typeof CAPABILITY_INVOCATION_SCHEMA_VERSION;
+  gondolinVersion: string;
+  decision: "admitted";
+  outcome: ScopedRunnerInvocationResult["outcome"];
   requestDigest: string;
   ceilingDigest: string;
   executionId: string;
   vmId: string;
   runtime: VmRuntimeIdentity;
+  featureManifestDigest: string;
+  qualificationId: string;
   policyVersions: {
     admission: "scoped-runner/v1";
     filesystem: "exact-ephemeral-vfs/v1";
@@ -213,6 +230,8 @@ export type ScopedRunnerInvocationEvidence = {
     /** Whether the empty guest cgroup was removed before settlement */
     resourceControllersRemoved: boolean;
   };
+  resultDigest: string;
+  integrity: CapabilityEvidenceIntegrity;
 };
 
 export type ScopedRunnerInvocationResult = {
@@ -234,9 +253,7 @@ export type ScopedRunnerInvocationResult = {
   error?: string;
 };
 
-export type ScopedRunnerResourceAccounting = {
-  /** Execution identity owning every reported counter */
-  executionId: string;
+export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
   limits: ScopedRunnerInvocationRequest["limits"];
   usage: {
     /** Host-observed QEMU CPU time since invocation dispatch in `ms` */
@@ -432,14 +449,18 @@ export class ScopedRunnerInvocationContext {
     options: ScopedRunnerInvokeOptions,
   ): Promise<ScopedRunnerInvocationResult> {
     const request = canonical.request;
-    const executionId = randomUUID();
+    const identity = AuthenticatedExecutionIdentity.begin(
+      canonical.digest,
+      this.ceilingDigest,
+    );
+    const executionId = identity.executionId;
     const startedAt = new Date().toISOString();
     const startedMonotonic = performance.now();
     const attempted: ScopedRunnerFilesystemEffect[] = [];
     const denied: ScopedRunnerFilesystemEffect[] = [];
     const observed: ScopedRunnerFilesystemEffect[] = [];
-    const requested = declaredEffects(request, "requested");
-    const granted = declaredEffects(request, "granted");
+    const requested = declaredEffects(identity, request, "requested");
+    const granted = declaredEffects(identity, request, "granted");
     const processEvents: ScopedRunnerProcessEvent[] = [];
     const provider = new MemoryProvider();
     const reads = new Map<string, ResourcePolicy>();
@@ -483,6 +504,7 @@ export class ScopedRunnerInvocationContext {
     if (cancelled) abort.abort();
 
     const hooks = createScopedHooks({
+      identity,
       reads,
       writes,
       attempted,
@@ -506,6 +528,7 @@ export class ScopedRunnerInvocationContext {
     let cpuObserver: HostCpuObserver | null = null;
     let hostCpuExhausted = false;
     let guestUsage: import("./exec.ts").ExecResourceUsage | undefined;
+    let commandDispatched = false;
 
     try {
       vm = await VM.create({
@@ -530,6 +553,7 @@ export class ScopedRunnerInvocationContext {
         },
       });
       vmId = vm.id;
+      identity.bindVm(vmId);
       runtime = vm.getRuntimeIdentity();
       for (const feature of [
         "exec.clear-env/v1",
@@ -556,7 +580,11 @@ export class ScopedRunnerInvocationContext {
       timer = setTimeout(() => {
         timedOut = true;
         processEvents.push(
-          lifecycleEvent("signal", "wall-time expiry requested VM teardown"),
+          lifecycleEvent(
+            identity,
+            "signal",
+            "wall-time expiry requested VM teardown",
+          ),
         );
         abort.abort();
       }, request.limits.wallTimeMs);
@@ -572,6 +600,7 @@ export class ScopedRunnerInvocationContext {
 
       const executableId = sha256(`executable:${request.launch.executable}`);
       processEvents.push({
+        ...identity.authenticate(vmId),
         domain: "process",
         kind: "policy",
         executableId,
@@ -580,6 +609,7 @@ export class ScopedRunnerInvocationContext {
         observedAt: new Date().toISOString(),
       });
       processEvents.push({
+        ...identity.authenticate(vmId),
         domain: "process",
         kind: "start",
         executableId,
@@ -591,6 +621,7 @@ export class ScopedRunnerInvocationContext {
         request.launch.executable,
         ...request.capabilities.process.allowedExecutables,
       ]);
+      commandDispatched = true;
       const result = await vm.exec(
         [request.launch.executable, ...request.launch.args],
         {
@@ -618,6 +649,7 @@ export class ScopedRunnerInvocationContext {
       exitCode = result.exitCode;
       guestUsage = result.resourceUsage;
       processEvents.push({
+        ...identity.authenticate(vmId),
         domain: "process",
         kind: "exit",
         executableId,
@@ -658,12 +690,18 @@ export class ScopedRunnerInvocationContext {
       } else if (cancelled) {
         outcome = "cancelled";
         processEvents.push(
-          lifecycleEvent("signal", "caller cancellation requested VM teardown"),
+          lifecycleEvent(
+            identity,
+            "signal",
+            "caller cancellation requested VM teardown",
+          ),
         );
       } else if (timedOut) {
         outcome = "timeout";
       } else if (!runnerAliveAtFailure) {
         outcome = "guest_crash";
+      } else if (!commandDispatched) {
+        outcome = "host_controller_failure";
       } else {
         outcome = "transport_failure";
       }
@@ -687,7 +725,10 @@ export class ScopedRunnerInvocationContext {
       vm !== null && (runnerPid === null || !isProcessAlive(runnerPid));
     const teardownComplete =
       vm !== null && closeError === null && runnerStopped;
-    if (admissionError && teardownComplete) throw admissionError;
+    if (admissionError && teardownComplete) {
+      identity.finish("revoked", true);
+      throw admissionError;
+    }
     if (!teardownComplete) {
       outcome = "teardown_failure";
       error = closeError
@@ -707,7 +748,7 @@ export class ScopedRunnerInvocationContext {
     );
     const exhausted = outcomeToExhausted(outcome);
     const resourceAccounting: ScopedRunnerResourceAccounting = {
-      executionId,
+      ...identity.authenticate(),
       limits: request.limits,
       usage: {
         cpuTimeMs: Math.ceil(
@@ -732,6 +773,7 @@ export class ScopedRunnerInvocationContext {
     };
     processEvents.push(
       lifecycleEvent(
+        identity,
         "teardown",
         teardownComplete
           ? "VM stopped; process tree empty; handles, policy, transport, and writable state revoked"
@@ -739,6 +781,7 @@ export class ScopedRunnerInvocationContext {
       ),
     );
     const teardown: ScopedRunnerInvocationEvidence["teardown"] = {
+      ...identity.authenticate(),
       commandStopped,
       vmStopped: teardownComplete,
       vfsHandlesRevoked: teardownComplete,
@@ -751,40 +794,67 @@ export class ScopedRunnerInvocationContext {
       completedAt: teardownComplete ? settledAt : null,
     };
 
-    return {
+    const resultWithoutEvidence = {
       outcome,
       exitCode,
       stdout: output.stdoutText,
       stderr: output.stderrText,
       outputTruncated: output.overflowed,
       resourceAccounting,
-      evidence: {
-        schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
-        requestDigest: canonical.digest,
-        ceilingDigest: this.ceilingDigest,
-        executionId,
-        vmId,
-        runtime,
-        policyVersions: {
-          admission: "scoped-runner/v1",
-          filesystem: "exact-ephemeral-vfs/v1",
-          process: "landlock-exec/v1",
-          resources: "qemu-cgroup-vfs/v1",
-          lifecycle: "one-shot-qemu/v1",
-        },
-        requested,
-        granted,
-        attempted,
-        denied,
-        observed,
-        processEvents,
-        writeDigests,
-        resources: resourceAccounting,
-        startedAt,
-        settledAt,
-        teardown,
-      },
       ...(error ? { error } : {}),
+    };
+    const featureManifestDigest = sha256(
+      stableJson(getCapabilityInvocationFeatureManifest()),
+    );
+    const policyVersions = {
+      admission: "scoped-runner/v1" as const,
+      filesystem: "exact-ephemeral-vfs/v1" as const,
+      process: "landlock-exec/v1" as const,
+      resources: "qemu-cgroup-vfs/v1" as const,
+      lifecycle: "one-shot-qemu/v1" as const,
+    };
+    const qualificationId = capabilityQualificationId({
+      gondolinVersion: gondolinVersion(),
+      capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
+      evidenceSchemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+      featureManifestDigest,
+      runtime,
+      policyVersions,
+    });
+    identity.finish(
+      teardownComplete ? "completed" : "revoked",
+      teardownComplete,
+    );
+    const evidence = sealCapabilityEvidence({
+      schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+      capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
+      gondolinVersion: gondolinVersion(),
+      decision: "admitted" as const,
+      outcome,
+      requestDigest: canonical.digest,
+      ceilingDigest: this.ceilingDigest,
+      executionId,
+      vmId,
+      runtime,
+      featureManifestDigest,
+      qualificationId,
+      policyVersions,
+      requested,
+      granted,
+      attempted,
+      denied,
+      observed,
+      processEvents,
+      writeDigests,
+      resources: resourceAccounting,
+      startedAt,
+      settledAt,
+      teardown,
+      resultDigest: capabilityResultDigest(resultWithoutEvidence),
+    });
+    return {
+      ...resultWithoutEvidence,
+      evidence,
     };
   }
 }
@@ -1318,6 +1388,7 @@ function normalizeRequest(input: unknown): ScopedRunnerInvocationRequest {
 }
 
 function createScopedHooks(options: {
+  identity: AuthenticatedExecutionIdentity;
   reads: Map<string, ResourcePolicy>;
   writes: Map<string, ResourcePolicy>;
   attempted: ScopedRunnerFilesystemEffect[];
@@ -1332,13 +1403,16 @@ function createScopedHooks(options: {
       const operation = classifyOperation(context.op, context.flags);
       const policy =
         options.reads.get(providerPath) ?? options.writes.get(providerPath);
-      const effect: ScopedRunnerFilesystemEffect = {
-        domain: "filesystem",
-        operation,
-        resourceId: policy?.resourceId ?? sha256(`guest:${guestPath}`),
-        guestPath,
-        decision: "attempted",
-      };
+      const effect: ScopedRunnerFilesystemEffect = authenticatedEffect(
+        options.identity,
+        {
+          domain: "filesystem",
+          operation,
+          resourceId: policy?.resourceId ?? sha256(`guest:${guestPath}`),
+          guestPath,
+          decision: "attempted",
+        },
+      );
       options.attempted.push(effect);
       const infrastructure = isInfrastructureLookup(providerPath, operation, [
         ...options.reads.keys(),
@@ -1348,7 +1422,12 @@ function createScopedHooks(options: {
         infrastructure ||
         (policy !== undefined && operationAllowed(policy, operation));
       if (!allowed) {
-        options.denied.push({ ...effect, decision: "denied" });
+        options.denied.push(
+          authenticatedEffect(options.identity, {
+            ...withoutAuthentication(effect),
+            decision: "denied" as const,
+          }),
+        );
         throw createErrnoError(ERRNO.EACCES, context.op, context.path);
       }
       if (
@@ -1364,13 +1443,15 @@ function createScopedHooks(options: {
       const policy =
         options.reads.get(providerPath) ?? options.writes.get(providerPath);
       if (!policy) return;
-      options.observed.push({
-        domain: "filesystem",
-        operation: classifyOperation(context.op, context.flags),
-        resourceId: policy.resourceId,
-        guestPath: policy.guestPath,
-        decision: "observed",
-      });
+      options.observed.push(
+        authenticatedEffect(options.identity, {
+          domain: "filesystem",
+          operation: classifyOperation(context.op, context.flags),
+          resourceId: policy.resourceId,
+          guestPath: policy.guestPath,
+          decision: "observed",
+        }),
+      );
     },
   };
 }
@@ -1431,25 +1512,30 @@ function isTruncatingOpen(flags: string | number | undefined): boolean {
 }
 
 function declaredEffects(
+  identity: AuthenticatedExecutionIdentity,
   request: ScopedRunnerInvocationRequest,
   decision: "requested" | "granted",
 ): ScopedRunnerFilesystemEffect[] {
   return [
-    ...request.capabilities.filesystem.reads.map((read) => ({
-      domain: "filesystem" as const,
-      operation: "read" as const,
-      resourceId: sha256(`file:${read.sourcePath}`),
-      guestPath: read.guestPath,
-      decision,
-    })),
-    ...request.capabilities.filesystem.writes.flatMap((write) =>
-      write.operations.map((operation) => ({
+    ...request.capabilities.filesystem.reads.map((read) =>
+      authenticatedEffect(identity, {
         domain: "filesystem" as const,
-        operation,
-        resourceId: sha256(`ephemeral:${write.guestPath}`),
-        guestPath: write.guestPath,
+        operation: "read" as const,
+        resourceId: sha256(`file:${read.sourcePath}`),
+        guestPath: read.guestPath,
         decision,
-      })),
+      }),
+    ),
+    ...request.capabilities.filesystem.writes.flatMap((write) =>
+      write.operations.map((operation) =>
+        authenticatedEffect(identity, {
+          domain: "filesystem" as const,
+          operation,
+          resourceId: sha256(`ephemeral:${write.guestPath}`),
+          guestPath: write.guestPath,
+          decision,
+        }),
+      ),
     ),
   ];
 }
@@ -1737,15 +1823,31 @@ function isShellExecutable(executable: string): boolean {
 }
 
 function lifecycleEvent(
+  identity: AuthenticatedExecutionIdentity,
   kind: ScopedRunnerProcessEvent["kind"],
   detail: string,
 ): ScopedRunnerProcessEvent {
   return {
+    ...identity.authenticate(),
     domain: "lifecycle",
     kind,
     detail,
     observedAt: new Date().toISOString(),
   };
+}
+
+function authenticatedEffect<T extends object>(
+  identity: AuthenticatedExecutionIdentity,
+  effect: T,
+): T & AuthenticatedEvidenceEvent {
+  return { ...identity.authenticate(), ...effect };
+}
+
+function withoutAuthentication<T extends AuthenticatedEvidenceEvent>(
+  effect: T,
+): Omit<T, keyof AuthenticatedEvidenceEvent> {
+  const { executionId: _executionId, sequence: _sequence, ...rest } = effect;
+  return rest;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1811,6 +1913,7 @@ function unavailableRuntimeIdentity(): VmRuntimeIdentity {
     vmm: "qemu",
     hostPlatform: process.platform,
     hostArchitecture: process.arch,
+    guestArchitecture: "unknown",
     imageDigest: "unavailable",
     guestKernelDigest: "unavailable",
     guestControlDigest: "unavailable",

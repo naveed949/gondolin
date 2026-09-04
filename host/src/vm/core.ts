@@ -230,6 +230,8 @@ export type VmRuntimeIdentity = {
   hostPlatform: NodeJS.Platform;
   /** Node host architecture */
   hostArchitecture: string;
+  /** Linux guest image architecture */
+  guestArchitecture: string;
   /** SHA-256 identity of the base root filesystem image */
   imageDigest: string;
   /** SHA-256 identity of the guest kernel */
@@ -646,6 +648,7 @@ export class VM {
       vmm: this.resolvedSandboxOptions.vmm,
       hostPlatform: process.platform,
       hostArchitecture: process.arch,
+      guestArchitecture: manifest?.config.arch ?? "unknown",
       imageDigest: digestAsset(this.resolvedSandboxOptions.rootfsPath),
       guestKernelDigest: digestAsset(this.resolvedSandboxOptions.kernelPath),
       guestControlDigest: digestAsset(this.resolvedSandboxOptions.initrdPath),

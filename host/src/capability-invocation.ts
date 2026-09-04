@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -17,13 +17,32 @@ import { HttpRequestBlockedError } from "./http/utils.ts";
 import { MemoryProvider } from "./vfs/node/index.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
+import {
+  CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+  CAPABILITY_FEATURE_SCHEMA_VERSION,
+  AuthenticatedExecutionIdentity,
+  capabilityQualificationId,
+  capabilityResultDigest,
+  gondolinVersion,
+  sealCapabilityEvidence,
+  type AuthenticatedEvidenceEvent,
+  type CapabilityEvidenceDecision,
+  type CapabilityEvidenceIntegrity,
+} from "./invocation-evidence.ts";
+
+export { CAPABILITY_EVIDENCE_SCHEMA_VERSION } from "./invocation-evidence.ts";
 
 export const CAPABILITY_CEILING_SCHEMA_VERSION =
   "gondolin.capability-ceiling/v1" as const;
 export const CAPABILITY_INVOCATION_SCHEMA_VERSION =
   "gondolin.capability-invocation/v1" as const;
-export const CAPABILITY_EVIDENCE_SCHEMA_VERSION =
-  "gondolin.capability-evidence/v1" as const;
+
+export const CAPABILITY_EVIDENCE_GUARANTEES = [
+  "authenticated-execution-identity",
+  "concurrent-disjoint-authority",
+  "tamper-evident-evidence",
+  "independent-evidence-verification",
+] as const;
 
 export const EXACT_READER_GUARANTEES = [
   "canonical-request",
@@ -36,6 +55,7 @@ export const EXACT_READER_GUARANTEES = [
   "disposable-qemu-vm",
   "host-observed-filesystem",
   "completed-teardown",
+  ...CAPABILITY_EVIDENCE_GUARANTEES,
 ] as const;
 
 export const HTTP_TLS_EGRESS_GUARANTEES = [
@@ -257,6 +277,7 @@ export const EXACT_WRITER_GUARANTEES = [
   "disposable-qemu-vm",
   "host-observed-filesystem",
   "completed-teardown",
+  ...CAPABILITY_EVIDENCE_GUARANTEES,
 ] as const;
 
 export type ExactWriterGuarantee = (typeof EXACT_WRITER_GUARANTEES)[number];
@@ -421,7 +442,7 @@ export type CapabilityInvocationRuntimeOptions = {
 export type CapabilityEffectDecision =
   "requested" | "granted" | "attempted" | "denied" | "observed";
 
-export type CapabilityFilesystemEffect = {
+export type CapabilityFilesystemEffect = AuthenticatedEvidenceEvent & {
   /** Capability domain */
   domain: "filesystem";
   /** Backend-neutral operation */
@@ -445,7 +466,7 @@ export type CapabilityFilesystemEffect = {
   decision: CapabilityEffectDecision;
 };
 
-export type CapabilityNetworkEffect = {
+export type CapabilityNetworkEffect = AuthenticatedEvidenceEvent & {
   /** Capability domain */
   domain: "network";
   /** Host-observed network operation */
@@ -470,7 +491,7 @@ export type CapabilityNetworkEffect = {
   decision: CapabilityEffectDecision;
 };
 
-export type CapabilityCredentialEffect = {
+export type CapabilityCredentialEffect = AuthenticatedEvidenceEvent & {
   /** Capability domain */
   domain: "credential";
   /** Host-observed credential lifecycle operation */
@@ -502,6 +523,10 @@ export type CapabilityEffect =
   | CapabilityCredentialEffect;
 
 export type CapabilityTeardownEvidence = {
+  /** Host execution identity authenticating teardown */
+  executionId: string;
+  /** Strictly increasing host-authored event sequence */
+  sequence: number;
   /** Whether the command transport has stopped */
   commandStopped: boolean;
   /** Whether the disposable VM runner has stopped */
@@ -522,16 +547,43 @@ export type CapabilityTeardownEvidence = {
 
 export type CapabilityInvocationOutcome =
   | "success"
+  | "policy_denied"
+  | "cancelled"
   | "command_failed"
   | "timeout"
   | "output_overflow"
+  | "cpu_exhausted"
+  | "memory_exhausted"
+  | "pids_exhausted"
+  | "storage_exhausted"
+  | "guest_crash"
+  | "host_controller_failure"
   | "transport_failure"
   | "commit_failure"
   | "teardown_failure";
 
+export type CapabilityLifecycleEvent = AuthenticatedEvidenceEvent & {
+  /** Host-observed event domain */
+  domain: "process" | "lifecycle";
+  /** Host-observed lifecycle transition */
+  kind: "start" | "signal" | "exit" | "teardown";
+  /** Non-sensitive host observation */
+  detail: string;
+  /** Host observation timestamp */
+  observedAt: string;
+};
+
 export type CapabilityInvocationEvidence = {
   /** Evidence schema identifier */
   schemaVersion: typeof CAPABILITY_EVIDENCE_SCHEMA_VERSION;
+  /** Capability request schema identifier */
+  capabilitySchemaVersion: typeof CAPABILITY_INVOCATION_SCHEMA_VERSION;
+  /** Gondolin package version producing the evidence */
+  gondolinVersion: string;
+  /** Host admission decision */
+  decision: CapabilityEvidenceDecision;
+  /** Final post-teardown outcome */
+  outcome: CapabilityInvocationOutcome;
   /** Canonical request SHA-256 */
   requestDigest: string;
   /** Immutable ceiling SHA-256 */
@@ -542,6 +594,10 @@ export type CapabilityInvocationEvidence = {
   vmId: string;
   /** Backend and guest image identities */
   runtime: VmRuntimeIdentity;
+  /** Exact feature manifest digest used for admission */
+  featureManifestDigest: string;
+  /** Exact runtime, policy, schema, and package qualification identity */
+  qualificationId: string;
   /** Invocation policy implementation versions */
   policyVersions: {
     admission: "exact-reader/v1" | "exact-writer/v1";
@@ -564,12 +620,18 @@ export type CapabilityInvocationEvidence = {
   denied: CapabilityEffect[];
   /** Host-observed successful effects */
   observed: CapabilityEffect[];
+  /** Authenticated host-observed process and lifecycle transitions */
+  processEvents: CapabilityLifecycleEvent[];
   /** Invocation start timestamp */
   startedAt: string;
   /** Invocation settlement timestamp */
   settledAt: string;
   /** Resource and lifecycle termination evidence */
   teardown: CapabilityTeardownEvidence;
+  /** SHA-256 binding to the public command result */
+  resultDigest: string;
+  /** Host signature over every preceding evidence field */
+  integrity: CapabilityEvidenceIntegrity;
 };
 
 export type CapabilityInvocationResult = {
@@ -602,7 +664,7 @@ export type CapabilityFeatureStatus = "active" | "unsupported" | "unverified";
 
 export type CapabilityInvocationFeatureManifest = {
   /** Feature manifest schema identifier */
-  schemaVersion: "gondolin.capability-features/v1";
+  schemaVersion: typeof CAPABILITY_FEATURE_SCHEMA_VERSION;
   /** Supported request schemas */
   requestSchemas: Record<string, CapabilityFeatureStatus>;
   /** Supported evidence schemas */
@@ -618,13 +680,14 @@ export type CapabilityInvocationFeatureManifest = {
 };
 
 const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
-  schemaVersion: "gondolin.capability-features/v1",
+  schemaVersion: CAPABILITY_FEATURE_SCHEMA_VERSION,
   requestSchemas: {
     [CAPABILITY_INVOCATION_SCHEMA_VERSION]: "active",
     "future-schema": "unsupported",
   },
   evidenceSchemas: {
     [CAPABILITY_EVIDENCE_SCHEMA_VERSION]: "active",
+    "gondolin.capability-evidence/v1": "unsupported",
     "future-schema": "unsupported",
   },
   profiles: {
@@ -661,6 +724,10 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "per-invocation-memory": "active",
     "per-invocation-pids": "active",
     "per-invocation-storage": "active",
+    "authenticated-execution-identity": "active",
+    "concurrent-disjoint-authority": "active",
+    "tamper-evident-evidence": "active",
+    "independent-evidence-verification": "active",
   },
   domains: {
     filesystem: "active",
@@ -724,6 +791,8 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "resource.output": "active",
     "resource.wall-time": "active",
     "shell.explicit": "active",
+    "evidence.ed25519": "active",
+    "evidence.runtime-policy-binding": "active",
   },
   qualifications: {
     "scoped-runner.resources/qemu/linux/released-image-kernel-arch-bundle":
@@ -1028,7 +1097,11 @@ export class CapabilityInvocationContext {
     },
   ): Promise<CapabilityInvocationResult> {
     const request = canonical.request;
-    const executionId = randomUUID();
+    const identity = AuthenticatedExecutionIdentity.begin(
+      canonical.digest,
+      this.ceilingDigest,
+    );
+    const executionId = identity.executionId;
     const startedAt = new Date().toISOString();
     const sourcePath = request.capabilities.filesystem.sourcePath;
     const sourceIdentity = this.sourceIdentities.get(sourcePath);
@@ -1043,11 +1116,12 @@ export class CapabilityInvocationContext {
     const resourceId = sha256(
       `file:${request.capabilities.filesystem.sourcePath}`,
     );
-    const requested = [fileEffect(request, resourceId, "requested")];
-    const granted = [fileEffect(request, resourceId, "granted")];
+    const requested = [fileEffect(identity, request, resourceId, "requested")];
+    const granted = [fileEffect(identity, request, resourceId, "granted")];
     const attempted: CapabilityEffect[] = [];
     const denied: CapabilityEffect[] = [];
     const observed: CapabilityEffect[] = [];
+    const processEvents: CapabilityLifecycleEvent[] = [];
     const networkEnabled = request.capabilities.network !== "none";
     const abort = new AbortController();
     const credentialAuthority = request.capabilities.credentials ?? "none";
@@ -1056,6 +1130,7 @@ export class CapabilityInvocationContext {
         ? null
         : createInvocationCredentialMediator({
             executionId,
+            identity,
             authority: credentialAuthority,
             store: this.credentialStore!,
             requested,
@@ -1099,6 +1174,7 @@ export class CapabilityInvocationContext {
     let closeError: Error | null = null;
     let admissionError: CapabilityAdmissionError | null = null;
     let runnerPid: number | null = null;
+    let commandDispatched = false;
 
     let timer: NodeJS.Timeout | null = null;
 
@@ -1107,6 +1183,7 @@ export class CapabilityInvocationContext {
       guestPath: request.capabilities.filesystem.guestPath,
       resourceId,
       networkEnabled,
+      identity,
       attempted,
       denied,
       observed,
@@ -1116,6 +1193,7 @@ export class CapabilityInvocationContext {
       networkAuthority !== "none"
         ? createInvocationHttpHooks({
             authority: networkAuthority,
+            identity,
             requested,
             granted,
             attempted,
@@ -1152,6 +1230,7 @@ export class CapabilityInvocationContext {
         },
       });
       vmId = vm.id;
+      identity.bindVm(vmId);
       runtime = vm.getRuntimeIdentity();
       if (!runtime.guestFeatures.includes("exec.clear-env/v1")) {
         throw new CapabilityAdmissionError(
@@ -1168,6 +1247,10 @@ export class CapabilityInvocationContext {
       }, request.limits.wallTimeMs);
       timer.unref?.();
 
+      processEvents.push(
+        lifecycleEvent(identity, "start", "entrypoint launch dispatched"),
+      );
+      commandDispatched = true;
       const result = await vm.exec(
         [request.launch.executable, ...request.launch.args],
         {
@@ -1183,7 +1266,19 @@ export class CapabilityInvocationContext {
       );
       commandStopped = true;
       exitCode = result.exitCode;
-      outcome = result.exitCode === 0 ? "success" : "command_failed";
+      processEvents.push(
+        lifecycleEvent(
+          identity,
+          "exit",
+          `entrypoint exited with code ${result.exitCode}`,
+        ),
+      );
+      outcome =
+        denied.length > 0
+          ? "policy_denied"
+          : result.exitCode === 0
+            ? "success"
+            : "command_failed";
     } catch (caught) {
       commandStopped = true;
       if (caught instanceof CapabilityAdmissionError) {
@@ -1191,7 +1286,10 @@ export class CapabilityInvocationContext {
         outcome = "transport_failure";
       } else if (output.overflowed) outcome = "output_overflow";
       else if (timedOut) outcome = "timeout";
-      else outcome = "transport_failure";
+      else if (!commandDispatched) outcome = "host_controller_failure";
+      else if (runnerPid !== null && !isProcessAlive(runnerPid)) {
+        outcome = "guest_crash";
+      } else outcome = "transport_failure";
       error = safeError(caught, redact);
     } finally {
       if (timer) clearTimeout(timer);
@@ -1212,6 +1310,7 @@ export class CapabilityInvocationContext {
     const teardownComplete =
       vm !== null && closeError === null && runnerStopped;
     if (admissionError && teardownComplete) {
+      identity.finish("revoked", true);
       throw admissionError;
     }
     if (!teardownComplete) {
@@ -1222,7 +1321,17 @@ export class CapabilityInvocationContext {
     }
 
     const settledAt = new Date().toISOString();
+    processEvents.push(
+      lifecycleEvent(
+        identity,
+        "teardown",
+        teardownComplete
+          ? "disposable VM stopped and invocation authority revoked"
+          : "disposable VM teardown could not be confirmed",
+      ),
+    );
     const teardown: CapabilityTeardownEvidence = {
+      ...identity.authenticate(),
       commandStopped,
       vmStopped: teardownComplete,
       vfsHandlesRevoked: teardownComplete,
@@ -1235,42 +1344,66 @@ export class CapabilityInvocationContext {
       completedAt: teardownComplete ? settledAt : null,
     };
 
-    return {
+    const resultWithoutEvidence = {
       outcome,
       exitCode,
       stdout: output.stdoutText,
       stderr: output.stderrText,
       outputTruncated: output.overflowed,
-      evidence: {
-        schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
-        requestDigest: canonical.digest,
-        ceilingDigest: this.ceilingDigest,
-        executionId,
-        vmId,
-        runtime,
-        policyVersions: {
-          admission: "exact-reader/v1",
-          filesystem: "snapshot-vfs/v1",
-          ...(networkEnabled
-            ? { network: "http-tls-mediator/v1" as const }
-            : {}),
-          ...(credentialMediator
-            ? { credentials: "destination-bound-credentials/v1" as const }
-            : {}),
-          lifecycle: "one-shot-qemu/v1",
-        },
-        inputDigest,
-        outputDigest: inputDigest,
-        requested,
-        granted,
-        attempted,
-        denied,
-        observed,
-        startedAt,
-        settledAt,
-        teardown,
-      },
       ...(error ? { error } : {}),
+    };
+    const featureManifestDigest = sha256(stableJson(FEATURE_MANIFEST));
+    const policyVersions = {
+      admission: "exact-reader/v1" as const,
+      filesystem: "snapshot-vfs/v1" as const,
+      ...(networkEnabled ? { network: "http-tls-mediator/v1" as const } : {}),
+      ...(credentialMediator
+        ? { credentials: "destination-bound-credentials/v1" as const }
+        : {}),
+      lifecycle: "one-shot-qemu/v1" as const,
+    };
+    const qualificationId = capabilityQualificationId({
+      gondolinVersion: gondolinVersion(),
+      capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
+      evidenceSchemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+      featureManifestDigest,
+      runtime,
+      policyVersions,
+    });
+    identity.finish(
+      teardownComplete ? "completed" : "revoked",
+      teardownComplete,
+    );
+    const evidence = sealCapabilityEvidence({
+      schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+      capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
+      gondolinVersion: gondolinVersion(),
+      decision: "admitted" as const,
+      outcome,
+      requestDigest: canonical.digest,
+      ceilingDigest: this.ceilingDigest,
+      executionId,
+      vmId,
+      runtime,
+      featureManifestDigest,
+      qualificationId,
+      policyVersions,
+      inputDigest,
+      outputDigest: inputDigest,
+      requested,
+      granted,
+      attempted,
+      denied,
+      observed,
+      processEvents,
+      startedAt,
+      settledAt,
+      teardown,
+      resultDigest: capabilityResultDigest(resultWithoutEvidence),
+    });
+    return {
+      ...resultWithoutEvidence,
+      evidence,
     };
   }
 
@@ -1280,7 +1413,11 @@ export class CapabilityInvocationContext {
     },
   ): Promise<CapabilityInvocationResult> {
     const request = canonical.request;
-    const executionId = randomUUID();
+    const identity = AuthenticatedExecutionIdentity.begin(
+      canonical.digest,
+      this.ceilingDigest,
+    );
+    const executionId = identity.executionId;
     const startedAt = new Date().toISOString();
     const targetPath = request.capabilities.filesystem.targetPath;
     const targetIdentity = this.targetIdentities.get(targetPath);
@@ -1294,14 +1431,17 @@ export class CapabilityInvocationContext {
     const inputDigest = initial === null ? null : sha256(initial);
     const resourceId = sha256(`file:${targetPath}`);
     const requested = request.capabilities.filesystem.operations.map(
-      (operation) => writerEffect(request, resourceId, operation, "requested"),
+      (operation) =>
+        writerEffect(identity, request, resourceId, operation, "requested"),
     );
     const granted = request.capabilities.filesystem.operations.map(
-      (operation) => writerEffect(request, resourceId, operation, "granted"),
+      (operation) =>
+        writerEffect(identity, request, resourceId, operation, "granted"),
     );
     const attempted: CapabilityEffect[] = [];
     const denied: CapabilityEffect[] = [];
     const observed: CapabilityEffect[] = [];
+    const processEvents: CapabilityLifecycleEvent[] = [];
     const abort = new AbortController();
     const output = new BoundedOutput(request.limits.outputBytes, abort);
     const provider = new MemoryProvider();
@@ -1321,6 +1461,7 @@ export class CapabilityInvocationContext {
     let closeError: Error | null = null;
     let admissionError: CapabilityAdmissionError | null = null;
     let runnerPid: number | null = null;
+    let commandDispatched = false;
     let timer: NodeJS.Timeout | null = null;
 
     const hooks = createWriterEvidenceHooks({
@@ -1329,6 +1470,7 @@ export class CapabilityInvocationContext {
       resourceId,
       targetInitiallyExists: initial !== null,
       operations: new Set(request.capabilities.filesystem.operations),
+      identity,
       attempted,
       denied,
       observed,
@@ -1357,6 +1499,7 @@ export class CapabilityInvocationContext {
         },
       });
       vmId = vm.id;
+      identity.bindVm(vmId);
       runtime = vm.getRuntimeIdentity();
       if (!runtime.guestFeatures.includes("exec.clear-env/v1")) {
         throw new CapabilityAdmissionError(
@@ -1373,6 +1516,10 @@ export class CapabilityInvocationContext {
       }, request.limits.wallTimeMs);
       timer.unref?.();
 
+      processEvents.push(
+        lifecycleEvent(identity, "start", "entrypoint launch dispatched"),
+      );
+      commandDispatched = true;
       const result = await vm.exec(
         [request.launch.executable, ...request.launch.args],
         {
@@ -1387,7 +1534,19 @@ export class CapabilityInvocationContext {
       );
       commandStopped = true;
       exitCode = result.exitCode;
-      outcome = result.exitCode === 0 ? "success" : "command_failed";
+      processEvents.push(
+        lifecycleEvent(
+          identity,
+          "exit",
+          `entrypoint exited with code ${result.exitCode}`,
+        ),
+      );
+      outcome =
+        denied.length > 0
+          ? "policy_denied"
+          : result.exitCode === 0
+            ? "success"
+            : "command_failed";
     } catch (caught) {
       commandStopped = true;
       if (caught instanceof CapabilityAdmissionError) {
@@ -1395,7 +1554,10 @@ export class CapabilityInvocationContext {
         outcome = "transport_failure";
       } else if (output.overflowed) outcome = "output_overflow";
       else if (timedOut) outcome = "timeout";
-      else outcome = "transport_failure";
+      else if (!commandDispatched) outcome = "host_controller_failure";
+      else if (runnerPid !== null && !isProcessAlive(runnerPid)) {
+        outcome = "guest_crash";
+      } else outcome = "transport_failure";
       error = safeError(caught);
     } finally {
       if (timer) clearTimeout(timer);
@@ -1415,7 +1577,10 @@ export class CapabilityInvocationContext {
     const teardownComplete =
       vm !== null && closeError === null && runnerStopped;
     let finalContents: Buffer | null = initial;
-    if (admissionError && teardownComplete) throw admissionError;
+    if (admissionError && teardownComplete) {
+      identity.finish("revoked", true);
+      throw admissionError;
+    }
 
     if (teardownComplete && hasObservedMutation(observed)) {
       try {
@@ -1444,7 +1609,17 @@ export class CapabilityInvocationContext {
     }
 
     const settledAt = new Date().toISOString();
+    processEvents.push(
+      lifecycleEvent(
+        identity,
+        "teardown",
+        teardownComplete
+          ? "disposable VM stopped and invocation authority revoked"
+          : "disposable VM teardown could not be confirmed",
+      ),
+    );
     const teardown: CapabilityTeardownEvidence = {
+      ...identity.authenticate(),
       commandStopped,
       vmStopped: teardownComplete,
       vfsHandlesRevoked: teardownComplete,
@@ -1453,36 +1628,62 @@ export class CapabilityInvocationContext {
       completedAt: teardownComplete ? settledAt : null,
     };
 
-    return {
+    const resultWithoutEvidence = {
       outcome,
       exitCode,
       stdout: output.stdoutText,
       stderr: output.stderrText,
       outputTruncated: output.overflowed,
-      evidence: {
-        schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
-        requestDigest: canonical.digest,
-        ceilingDigest: this.ceilingDigest,
-        executionId,
-        vmId,
-        runtime,
-        policyVersions: {
-          admission: "exact-writer/v1",
-          filesystem: "exact-writer-vfs/v1",
-          lifecycle: "one-shot-qemu/v1",
-        },
-        inputDigest,
-        outputDigest: finalContents === null ? null : sha256(finalContents),
-        requested,
-        granted,
-        attempted,
-        denied,
-        observed,
-        startedAt,
-        settledAt,
-        teardown,
-      },
       ...(error ? { error } : {}),
+    };
+    const featureManifestDigest = sha256(stableJson(FEATURE_MANIFEST));
+    const policyVersions = {
+      admission: "exact-writer/v1" as const,
+      filesystem: "exact-writer-vfs/v1" as const,
+      lifecycle: "one-shot-qemu/v1" as const,
+    };
+    const qualificationId = capabilityQualificationId({
+      gondolinVersion: gondolinVersion(),
+      capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
+      evidenceSchemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+      featureManifestDigest,
+      runtime,
+      policyVersions,
+    });
+    identity.finish(
+      teardownComplete ? "completed" : "revoked",
+      teardownComplete,
+    );
+    const evidence = sealCapabilityEvidence({
+      schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+      capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
+      gondolinVersion: gondolinVersion(),
+      decision: "admitted" as const,
+      outcome,
+      requestDigest: canonical.digest,
+      ceilingDigest: this.ceilingDigest,
+      executionId,
+      vmId,
+      runtime,
+      featureManifestDigest,
+      qualificationId,
+      policyVersions,
+      inputDigest,
+      outputDigest: finalContents === null ? null : sha256(finalContents),
+      requested,
+      granted,
+      attempted,
+      denied,
+      observed,
+      processEvents,
+      startedAt,
+      settledAt,
+      teardown,
+      resultDigest: capabilityResultDigest(resultWithoutEvidence),
+    });
+    return {
+      ...resultWithoutEvidence,
+      evidence,
     };
   }
 }
@@ -1548,6 +1749,7 @@ class BoundedOutput {
 }
 
 function createEvidenceHooks(options: {
+  identity: AuthenticatedExecutionIdentity;
   exactPath: string;
   guestPath: string;
   resourceId: string;
@@ -1567,13 +1769,18 @@ function createEvidenceHooks(options: {
       const isExact = providerPath === options.exactPath;
       const isMountRoot = providerPath === "/";
       const operation = classifyOperation(context.op, context.flags);
-      const effect: CapabilityFilesystemEffect = {
-        domain: "filesystem",
-        operation,
-        resourceId: isExact ? options.resourceId : sha256(`guest:${guestPath}`),
-        guestPath,
-        decision: "attempted",
-      };
+      const effect: CapabilityFilesystemEffect = authenticatedEffect(
+        options.identity,
+        {
+          domain: "filesystem",
+          operation,
+          resourceId: isExact
+            ? options.resourceId
+            : sha256(`guest:${guestPath}`),
+          guestPath,
+          decision: "attempted",
+        },
+      );
       options.attempted.push(effect);
 
       const permittedMountLookup = isMountRoot && operation === "lookup";
@@ -1593,7 +1800,12 @@ function createEvidenceHooks(options: {
         operation === "write" ||
         operation === "other"
       ) {
-        options.denied.push({ ...effect, decision: "denied" });
+        options.denied.push(
+          authenticatedEffect(options.identity, {
+            ...withoutAuthentication(effect),
+            decision: "denied" as const,
+          }),
+        );
         throw createErrnoError(ERRNO.EACCES, context.op, context.path);
       }
     },
@@ -1604,13 +1816,15 @@ function createEvidenceHooks(options: {
     }): void {
       const normalized = normalizeProviderPath(context.path ?? "/");
       if (normalized !== options.exactPath) return;
-      options.observed.push({
-        domain: "filesystem",
-        operation: classifyOperation(context.op, context.flags),
-        resourceId: options.resourceId,
-        guestPath: options.guestPath,
-        decision: "observed",
-      });
+      options.observed.push(
+        authenticatedEffect(options.identity, {
+          domain: "filesystem",
+          operation: classifyOperation(context.op, context.flags),
+          resourceId: options.resourceId,
+          guestPath: options.guestPath,
+          decision: "observed",
+        }),
+      );
     },
   };
 }
@@ -1624,6 +1838,7 @@ type EvidenceHookContext = {
 };
 
 function createWriterEvidenceHooks(options: {
+  identity: AuthenticatedExecutionIdentity;
   exactPath: string;
   guestPath: string;
   resourceId: string;
@@ -1709,7 +1924,7 @@ function createWriterEvidenceHooks(options: {
         providerPath === "/etc/gondolin";
       const operationEffects = effects(context);
       for (const item of operationEffects) {
-        const effect: CapabilityEffect = {
+        const effect: CapabilityEffect = authenticatedEffect(options.identity, {
           domain: "filesystem",
           operation: item.operation,
           resourceId: isExact
@@ -1717,12 +1932,17 @@ function createWriterEvidenceHooks(options: {
             : sha256(`guest:${guestPath}`),
           guestPath: isExact ? options.guestPath : guestPath,
           decision: "attempted",
-        };
+        });
         options.attempted.push(effect);
         const allowedLookup =
           item.operation === "lookup" && infrastructureLookup;
         if ((!isExact && !allowedLookup) || !item.permitted) {
-          options.denied.push({ ...effect, decision: "denied" });
+          options.denied.push(
+            authenticatedEffect(options.identity, {
+              ...withoutAuthentication(effect),
+              decision: "denied" as const,
+            }),
+          );
           throw createErrnoError(ERRNO.EACCES, context.op, rawPath);
         }
       }
@@ -1732,13 +1952,15 @@ function createWriterEvidenceHooks(options: {
       if (providerPath !== options.exactPath) return;
       for (const item of effects(context)) {
         if (!item.permitted || item.operation === "lookup") continue;
-        options.observed.push({
-          domain: "filesystem",
-          operation: item.operation,
-          resourceId: options.resourceId,
-          guestPath: options.guestPath,
-          decision: "observed",
-        });
+        options.observed.push(
+          authenticatedEffect(options.identity, {
+            domain: "filesystem",
+            operation: item.operation,
+            resourceId: options.resourceId,
+            guestPath: options.guestPath,
+            decision: "observed",
+          }),
+        );
       }
     },
   };
@@ -2279,9 +2501,11 @@ class InvocationCredentialMediator {
   private readonly attempted: CapabilityEffect[];
   private readonly denied: CapabilityEffect[];
   private readonly observed: CapabilityEffect[];
+  private readonly identity: AuthenticatedExecutionIdentity;
 
   constructor(options: {
     executionId: string;
+    identity: AuthenticatedExecutionIdentity;
     authority: Exclude<CapabilityCredentialAuthority, "none">;
     store: CapabilityCredentialStore;
     attempted: CapabilityEffect[];
@@ -2289,6 +2513,7 @@ class InvocationCredentialMediator {
     observed: CapabilityEffect[];
   }) {
     this.authority = options.authority;
+    this.identity = options.identity;
     this.store = options.store;
     this.attempted = options.attempted;
     this.denied = options.denied;
@@ -2385,7 +2610,14 @@ class InvocationCredentialMediator {
       updated = updated.split(placeholder).join(entry.value);
       redeemed = true;
       this.observed.push(
-        credentialEffect(projection, "use", "observed", destination, method),
+        credentialEffect(
+          this.identity,
+          projection,
+          "use",
+          "observed",
+          destination,
+          method,
+        ),
       );
     }
 
@@ -2412,6 +2644,7 @@ class InvocationCredentialMediator {
       if (!redeemed) {
         this.observed.push(
           credentialEffect(
+            this.identity,
             activeProjection,
             "use",
             "observed",
@@ -2430,7 +2663,14 @@ class InvocationCredentialMediator {
     method: string,
   ): StoredCapabilityCredential {
     this.attempted.push(
-      credentialEffect(projection, "use", "attempted", destination, method),
+      credentialEffect(
+        this.identity,
+        projection,
+        "use",
+        "attempted",
+        destination,
+        method,
+      ),
     );
     if (!this.active) this.reject(projection, destination, method, "inactive");
     this.assertScope(projection, destination, method);
@@ -2514,6 +2754,7 @@ class InvocationCredentialMediator {
           ? "revocation"
           : "denial";
     const effect = credentialEffect(
+      this.identity,
       projection,
       operation,
       "denied",
@@ -2530,6 +2771,7 @@ class InvocationCredentialMediator {
 
 function createInvocationCredentialMediator(options: {
   executionId: string;
+  identity: AuthenticatedExecutionIdentity;
   authority: Exclude<CapabilityCredentialAuthority, "none">;
   store: CapabilityCredentialStore;
   requested: CapabilityEffect[];
@@ -2540,19 +2782,38 @@ function createInvocationCredentialMediator(options: {
 }): InvocationCredentialMediator {
   for (const projection of options.authority.projections) {
     options.requested.push(
-      credentialEffect(projection, "projection", "requested", projection),
+      credentialEffect(
+        options.identity,
+        projection,
+        "projection",
+        "requested",
+        projection,
+      ),
     );
     options.granted.push(
-      credentialEffect(projection, "projection", "granted", projection),
+      credentialEffect(
+        options.identity,
+        projection,
+        "projection",
+        "granted",
+        projection,
+      ),
     );
     options.observed.push(
-      credentialEffect(projection, "projection", "observed", projection),
+      credentialEffect(
+        options.identity,
+        projection,
+        "projection",
+        "observed",
+        projection,
+      ),
     );
   }
   return new InvocationCredentialMediator(options);
 }
 
 function credentialEffect(
+  identity: AuthenticatedExecutionIdentity,
   projection: CapabilityCredentialProjection,
   operation: CapabilityCredentialEffect["operation"],
   decision: CapabilityEffectDecision,
@@ -2560,7 +2821,7 @@ function credentialEffect(
   method?: string,
   reason?: CredentialDenialReason,
 ): CapabilityCredentialEffect {
-  return {
+  return authenticatedEffect(identity, {
     domain: "credential",
     operation,
     referenceId: sha256(`credential-reference:${projection.reference}`),
@@ -2572,7 +2833,7 @@ function credentialEffect(
     ...(method ? { method } : {}),
     ...(reason ? { reason } : {}),
     decision,
-  };
+  });
 }
 
 function decodeBasicCredential(value: string): {
@@ -2592,6 +2853,7 @@ function decodeBasicCredential(value: string): {
 }
 
 function createInvocationHttpHooks(options: {
+  identity: AuthenticatedExecutionIdentity;
   authority: Exclude<CapabilityNetworkAuthority, "none">;
   requested: CapabilityEffect[];
   granted: CapabilityEffect[];
@@ -2603,9 +2865,11 @@ function createInvocationHttpHooks(options: {
   for (const rule of options.authority.rules) {
     for (const method of rule.methods) {
       options.requested.push(
-        networkEffect(rule, "request", "requested", method),
+        networkEffect(options.identity, rule, "request", "requested", method),
       );
-      options.granted.push(networkEffect(rule, "request", "granted", method));
+      options.granted.push(
+        networkEffect(options.identity, rule, "request", "granted", method),
+      );
     }
   }
 
@@ -2639,14 +2903,27 @@ function createInvocationHttpHooks(options: {
         : undefined;
       const effect = parsed
         ? networkEffect(
+            options.identity,
             parsed,
             "request",
             rule ? "attempted" : "denied",
             method,
           )
-        : unknownNetworkEffect("request", "denied", method);
-      options.attempted.push({ ...effect, decision: "attempted" });
-      if (!rule) options.denied.push({ ...effect, decision: "denied" });
+        : unknownNetworkEffect(options.identity, "request", "denied", method);
+      options.attempted.push(
+        authenticatedEffect(options.identity, {
+          ...withoutAuthentication(effect),
+          decision: "attempted" as const,
+        }),
+      );
+      if (!rule) {
+        options.denied.push(
+          authenticatedEffect(options.identity, {
+            ...withoutAuthentication(effect),
+            decision: "denied" as const,
+          }),
+        );
+      }
       return Boolean(rule);
     },
     isIpAllowed(info: HttpIpAllowInfo) {
@@ -2659,20 +2936,25 @@ function createInvocationHttpHooks(options: {
       );
       const operation =
         info.phase === "connection" ? "connection" : "resolution";
-      const effect: CapabilityNetworkEffect = {
-        domain: "network",
-        operation,
-        protocol,
-        destination,
-        port: info.port,
-        addressId: sha256(`address:${info.ip}`),
-        decision: "attempted",
-      };
+      const effect: CapabilityNetworkEffect = authenticatedEffect(
+        options.identity,
+        {
+          domain: "network",
+          operation,
+          protocol,
+          destination,
+          port: info.port,
+          addressId: sha256(`address:${info.ip}`),
+          decision: "attempted",
+        },
+      );
       options.attempted.push(effect);
-      (allowed ? options.observed : options.denied).push({
-        ...effect,
-        decision: allowed ? "observed" : "denied",
-      });
+      (allowed ? options.observed : options.denied).push(
+        authenticatedEffect(options.identity, {
+          ...withoutAuthentication(effect),
+          decision: allowed ? "observed" : "denied",
+        }),
+      );
       return allowed;
     },
     isRedirectAllowed(source, target) {
@@ -2697,14 +2979,27 @@ function createInvocationHttpHooks(options: {
       );
       const effect = to
         ? networkEffect(
+            options.identity,
             to,
             "redirect",
             allowed ? "observed" : "denied",
             targetMethod,
           )
-        : unknownNetworkEffect("redirect", "denied", targetMethod);
-      options.attempted.push({ ...effect, decision: "attempted" });
-      (allowed ? options.observed : options.denied).push(effect);
+        : unknownNetworkEffect(
+            options.identity,
+            "redirect",
+            "denied",
+            targetMethod,
+          );
+      options.attempted.push(
+        authenticatedEffect(options.identity, {
+          ...withoutAuthentication(effect),
+          decision: "attempted" as const,
+        }),
+      );
+      (allowed ? options.observed : options.denied).push(
+        authenticatedEffect(options.identity, withoutAuthentication(effect)),
+      );
       return allowed;
     },
     async onResponse(response, request) {
@@ -2712,6 +3007,7 @@ function createInvocationHttpHooks(options: {
       if (parsed) {
         options.observed.push(
           networkEffect(
+            options.identity,
             parsed,
             "completion",
             "observed",
@@ -2732,19 +3028,24 @@ function createInvocationHttpHooks(options: {
         info.protocol === "tcp"
           ? info.protocol
           : "unknown";
-      const effect: CapabilityNetworkEffect = {
-        domain: "network",
-        operation: "flow",
-        protocol,
-        destination: sha256(`guest-flow:${info.destination}`),
-        port: info.port,
-        decision: "attempted",
-      };
+      const effect: CapabilityNetworkEffect = authenticatedEffect(
+        options.identity,
+        {
+          domain: "network",
+          operation: "flow",
+          protocol,
+          destination: sha256(`guest-flow:${info.destination}`),
+          port: info.port,
+          decision: "attempted",
+        },
+      );
       options.attempted.push(effect);
-      (info.allowed ? options.observed : options.denied).push({
-        ...effect,
-        decision: info.allowed ? "observed" : "denied",
-      });
+      (info.allowed ? options.observed : options.denied).push(
+        authenticatedEffect(options.identity, {
+          ...withoutAuthentication(effect),
+          decision: info.allowed ? "observed" : "denied",
+        }),
+      );
     },
   };
 }
@@ -2785,12 +3086,13 @@ function normalizeObservedDestination(value: string): string {
 }
 
 function networkEffect(
+  identity: AuthenticatedExecutionIdentity,
   rule: Pick<CapabilityNetworkRule, "protocol" | "destination" | "port">,
   operation: CapabilityNetworkEffect["operation"],
   decision: CapabilityEffectDecision,
   method?: string,
 ): CapabilityNetworkEffect {
-  return {
+  return authenticatedEffect(identity, {
     domain: "network",
     operation,
     protocol: rule.protocol,
@@ -2798,15 +3100,16 @@ function networkEffect(
     port: rule.port,
     ...(method ? { method } : {}),
     decision,
-  };
+  });
 }
 
 function unknownNetworkEffect(
+  identity: AuthenticatedExecutionIdentity,
   operation: CapabilityNetworkEffect["operation"],
   decision: CapabilityEffectDecision,
   method?: string,
 ): CapabilityNetworkEffect {
-  return {
+  return authenticatedEffect(identity, {
     domain: "network",
     operation,
     protocol: "unknown",
@@ -2814,7 +3117,7 @@ function unknownNetworkEffect(
     port: 0,
     ...(method ? { method } : {}),
     decision,
-  };
+  });
 }
 
 function isInternalAddress(ip: string): boolean {
@@ -3786,31 +4089,61 @@ function toGuestPath(providerPath: string): string {
 }
 
 function fileEffect(
+  identity: AuthenticatedExecutionIdentity,
   request: ExactReaderInvocationRequest,
   resourceId: string,
   decision: "requested" | "granted",
 ): CapabilityEffect {
-  return {
+  return authenticatedEffect(identity, {
     domain: "filesystem",
     operation: "read",
     resourceId,
     guestPath: request.capabilities.filesystem.guestPath,
     decision,
-  };
+  });
 }
 
 function writerEffect(
+  identity: AuthenticatedExecutionIdentity,
   request: ExactWriterInvocationRequest,
   resourceId: string,
   operation: ExactWriterOperation,
   decision: "requested" | "granted",
 ): CapabilityEffect {
-  return {
+  return authenticatedEffect(identity, {
     domain: "filesystem",
     operation,
     resourceId,
     guestPath: request.capabilities.filesystem.guestPath,
     decision,
+  });
+}
+
+function authenticatedEffect<T extends object>(
+  identity: AuthenticatedExecutionIdentity,
+  effect: T,
+): T & AuthenticatedEvidenceEvent {
+  return { ...identity.authenticate(), ...effect };
+}
+
+function withoutAuthentication<T extends AuthenticatedEvidenceEvent>(
+  effect: T,
+): Omit<T, keyof AuthenticatedEvidenceEvent> {
+  const { executionId: _executionId, sequence: _sequence, ...rest } = effect;
+  return rest;
+}
+
+function lifecycleEvent(
+  identity: AuthenticatedExecutionIdentity,
+  kind: CapabilityLifecycleEvent["kind"],
+  detail: string,
+): CapabilityLifecycleEvent {
+  return {
+    ...identity.authenticate(),
+    domain: kind === "start" || kind === "exit" ? "process" : "lifecycle",
+    kind,
+    detail,
+    observedAt: new Date().toISOString(),
   };
 }
 
@@ -3823,6 +4156,7 @@ function unavailableRuntimeIdentity(): VmRuntimeIdentity {
     vmm: "qemu",
     hostPlatform: process.platform,
     hostArchitecture: process.arch,
+    guestArchitecture: "unknown",
     imageDigest: "unavailable",
     guestKernelDigest: "unavailable",
     guestControlDigest: "unavailable",

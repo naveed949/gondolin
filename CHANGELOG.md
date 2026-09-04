@@ -10,6 +10,7 @@ All notable changes to Gondolin are documented here.
 - Add fail-closed scoped-runner CPU, memory, PID, writable-storage, output, and wall-time limits with structured accounting and exhaustion outcomes. #5
 - Add declarative invocation-scoped HTTP/TLS egress, redirect and resolution reauthorization, network evidence, and channel teardown. #6
 - Add invocation-bound destination credential projection with trusted host references, live rotation/revocation checks, safe lifecycle evidence, and current/historical value redaction. #7
+- Add concurrent profile isolation fixtures, authenticated execution identities, signed evidence v2, independent verification and teardown probes, exact runtime/policy qualification binding, and adversarial tamper detection. #8
 
 ## 0.12.0
 

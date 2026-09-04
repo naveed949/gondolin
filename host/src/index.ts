@@ -43,6 +43,7 @@ export {
   CAPABILITY_CEILING_SCHEMA_VERSION,
   CAPABILITY_INVOCATION_SCHEMA_VERSION,
   CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+  CAPABILITY_EVIDENCE_GUARANTEES,
   EXACT_READER_GUARANTEES,
   EXACT_WRITER_GUARANTEES,
   HTTP_TLS_EGRESS_GUARANTEES,
@@ -82,6 +83,19 @@ export {
   type CapabilityFeatureStatus,
   type CapabilityInvocationFeatureManifest,
 } from "./capability-invocation.ts";
+export {
+  CAPABILITY_FEATURE_SCHEMA_VERSION,
+  EXECUTION_IDENTITY_RETENTION_MS,
+  getCapabilityEvidenceVerifierIdentity,
+  probeCapabilityInvocationTeardown,
+  verifyCapabilityInvocationEvidence,
+  verifyCapabilityInvocationResult,
+  type AuthenticatedEvidenceEvent,
+  type CapabilityEvidenceDecision,
+  type CapabilityEvidenceIntegrity,
+  type CapabilityEvidenceVerificationOptions,
+  type CapabilityEvidenceVerification,
+} from "./invocation-evidence.ts";
 export {
   SCOPED_RUNNER_GUARANTEES,
   ScopedRunnerInvocationContext,
