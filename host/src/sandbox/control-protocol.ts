@@ -25,6 +25,8 @@
  * +---------+-----------+-------------------+
  * tag = 1 stdout, tag = 2 stderr, id big-endian.
  */
+
+import type { ExecResourceUsage } from "../exec.ts";
 export type ExecCommandMessage = {
   type: "exec";
   /** request id */
@@ -39,6 +41,17 @@ export type ExecCommandMessage = {
   clear_env?: boolean;
   /** exact executable paths enforced for the complete process tree */
   allowed_executables?: string[];
+  /** exact writable files enforced for the complete process tree */
+  allowed_writable_paths?: string[];
+  /** resource controllers installed before releasing the exec start gate */
+  resource_limits?: {
+    /** complete process-tree CPU time in `ms` */
+    cpu_time_ms: number;
+    /** complete process-tree memory in `bytes` */
+    memory_bytes: number;
+    /** maximum simultaneous process-tree members */
+    pids: number;
+  };
   /** working directory */
   cwd?: string;
   /** whether stdin messages will be sent */
@@ -121,6 +134,8 @@ export type ExecResponseMessage = {
   exit_code: number;
   /** termination signal (if any) */
   signal?: number;
+  /** settled guest resource-controller accounting */
+  resource_usage?: ExecResourceUsage;
 };
 
 export type ErrorMessage = {
@@ -150,10 +165,7 @@ export type StatusMessage = {
 };
 
 export type ServerMessage =
-  | ExecResponseMessage
-  | ErrorMessage
-  | SnapshotResponseMessage
-  | StatusMessage;
+  ExecResponseMessage | ErrorMessage | SnapshotResponseMessage | StatusMessage;
 
 export type OutputStream = "stdout" | "stderr";
 

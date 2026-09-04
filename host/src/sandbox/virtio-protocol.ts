@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { TypeEncoderMap, decode, encode } from "cbor2";
+import type { ExecResourceUsage } from "../exec.ts";
 
 const cborEncoderTypes = new TypeEncoderMap();
 cborEncoderTypes.registerEncoder(Buffer, (value) => [
@@ -39,6 +40,8 @@ export type ExecResponse = {
     exit_code: number;
     /** termination signal (if any) */
     signal?: number;
+    /** settled guest resource-controller accounting */
+    resource_usage?: ExecResourceUsage;
   };
 };
 
@@ -286,6 +289,17 @@ export type ExecRequest = {
     clear_env?: boolean;
     /** exact executable paths enforced for the complete process tree */
     allowed_executables?: string[];
+    /** exact writable files enforced for the complete process tree */
+    allowed_writable_paths?: string[];
+    /** resource controllers installed before releasing the exec start gate */
+    resource_limits?: {
+      /** complete process-tree CPU time in `ms` */
+      cpu_time_ms: number;
+      /** complete process-tree memory in `bytes` */
+      memory_bytes: number;
+      /** maximum simultaneous process-tree members */
+      pids: number;
+    };
     /** working directory */
     cwd?: string;
     /** whether stdin messages will be sent */
@@ -479,6 +493,10 @@ export function buildExecRequest(
   if (payload.clear_env !== undefined) cleaned.clear_env = payload.clear_env;
   if (payload.allowed_executables !== undefined)
     cleaned.allowed_executables = payload.allowed_executables;
+  if (payload.allowed_writable_paths !== undefined)
+    cleaned.allowed_writable_paths = payload.allowed_writable_paths;
+  if (payload.resource_limits !== undefined)
+    cleaned.resource_limits = payload.resource_limits;
   if (payload.cwd !== undefined) cleaned.cwd = payload.cwd;
   if (payload.stdin !== undefined) cleaned.stdin = payload.stdin;
   if (payload.pty !== undefined) cleaned.pty = payload.pty;

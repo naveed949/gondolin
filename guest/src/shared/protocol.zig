@@ -33,6 +33,34 @@ pub const ProtocolError = error{
     InvalidValue,
 };
 
+pub const ExecResourceLimits = struct {
+    /// complete process-tree CPU time in `ms`
+    cpu_time_ms: u64,
+    /// complete process-tree memory in `bytes`
+    memory_bytes: u64,
+    /// maximum simultaneous process-tree members
+    pids: u32,
+};
+
+pub const ExecResourceExhaustion = enum {
+    cpu,
+    memory,
+    pids,
+};
+
+pub const ExecResourceUsage = struct {
+    /// complete process-tree CPU time in `ms`
+    cpu_time_ms: u64,
+    /// peak complete process-tree memory in `bytes`
+    memory_peak_bytes: u64,
+    /// peak simultaneous process-tree members
+    pids_peak: u64,
+    /// controller which caused termination
+    exhausted: ?ExecResourceExhaustion,
+    /// whether the resource group was empty and removed
+    resource_group_removed: bool,
+};
+
 pub const ExecRequest = struct {
     /// correlation id
     id: u32,
@@ -46,6 +74,10 @@ pub const ExecRequest = struct {
     clear_env: bool,
     /// exact executable paths permitted for the complete process tree
     allowed_executables: []const []const u8,
+    /// exact writable files permitted for the complete process tree
+    allowed_writable_paths: []const []const u8,
+    /// fail-closed complete-tree resource limits
+    resource_limits: ?ExecResourceLimits,
     /// working directory
     cwd: ?[]const u8,
     /// whether stdin frames will be sent
@@ -414,12 +446,13 @@ pub fn encodeExecResponse(
     id: u32,
     exit_code: i32,
     signal: ?i32,
+    resource_usage: ?ExecResourceUsage,
 ) ![]u8 {
     var buf = std.ArrayList(u8).empty;
     defer buf.deinit(allocator);
 
     const w = cbor.arrayListWriter(allocator, &buf);
-    const map_len: usize = if (signal == null) 1 else 2;
+    const map_len: usize = 1 + @as(usize, if (signal == null) 0 else 1) + @as(usize, if (resource_usage == null) 0 else 1);
 
     try cbor.writeMapStart(w, 4);
     try cbor.writeText(w, "v");
@@ -435,6 +468,24 @@ pub fn encodeExecResponse(
     if (signal) |sig| {
         try cbor.writeText(w, "signal");
         try cbor.writeInt(w, sig);
+    }
+    if (resource_usage) |usage| {
+        try cbor.writeText(w, "resource_usage");
+        try cbor.writeMapStart(w, 5);
+        try cbor.writeText(w, "cpuTimeMs");
+        try cbor.writeUInt(w, usage.cpu_time_ms);
+        try cbor.writeText(w, "memoryPeakBytes");
+        try cbor.writeUInt(w, usage.memory_peak_bytes);
+        try cbor.writeText(w, "pidsPeak");
+        try cbor.writeUInt(w, usage.pids_peak);
+        try cbor.writeText(w, "exhausted");
+        if (usage.exhausted) |exhausted| {
+            try cbor.writeText(w, @tagName(exhausted));
+        } else {
+            try cbor.writeNull(w);
+        }
+        try cbor.writeText(w, "resourceGroupRemoved");
+        try cbor.writeBool(w, usage.resource_group_removed);
     }
 
     return try buf.toOwnedSlice(allocator);
@@ -792,6 +843,22 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
     const allowed_executables = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_executables"));
     errdefer allocator.free(allowed_executables);
 
+    const allowed_writable_paths = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_writable_paths"));
+    errdefer allocator.free(allowed_writable_paths);
+
+    var resource_limits: ?ExecResourceLimits = null;
+    if (cbor.getMapValue(payload, "resource_limits")) |limits_val| {
+        const limits = try expectMap(limits_val);
+        resource_limits = .{
+            .cpu_time_ms = try expectU64(cbor.getMapValue(limits, "cpu_time_ms") orelse return ProtocolError.MissingField),
+            .memory_bytes = try expectU64(cbor.getMapValue(limits, "memory_bytes") orelse return ProtocolError.MissingField),
+            .pids = try expectU32(cbor.getMapValue(limits, "pids") orelse return ProtocolError.MissingField),
+        };
+        if (resource_limits.?.cpu_time_ms == 0 or resource_limits.?.memory_bytes == 0 or resource_limits.?.pids == 0) {
+            return ProtocolError.InvalidValue;
+        }
+    }
+
     var clear_env = false;
     if (cbor.getMapValue(payload, "clear_env")) |clear_env_val| {
         clear_env = try expectBool(clear_env_val);
@@ -831,6 +898,8 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         .env = env,
         .clear_env = clear_env,
         .allowed_executables = allowed_executables,
+        .allowed_writable_paths = allowed_writable_paths,
+        .resource_limits = resource_limits,
         .cwd = cwd,
         .stdin = stdin_flag,
         .pty = pty_flag,
@@ -1174,6 +1243,16 @@ fn expectU32(value: cbor.Value) !u32 {
         .Int => |num| {
             if (num < 0 or num > std.math.maxInt(u32)) return ProtocolError.InvalidValue;
             return @as(u32, @intCast(num));
+        },
+        else => ProtocolError.InvalidType,
+    };
+}
+
+fn expectU64(value: cbor.Value) !u64 {
+    return switch (value) {
+        .Int => |num| {
+            if (num < 0) return ProtocolError.InvalidValue;
+            return @as(u64, @intCast(num));
         },
         else => ProtocolError.InvalidType,
     };

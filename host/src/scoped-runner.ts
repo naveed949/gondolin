@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { Writable } from "node:stream";
 
 import {
@@ -16,6 +18,7 @@ import {
 import { VM, type VmRuntimeIdentity } from "./vm/core.ts";
 import { MemoryProvider } from "./vfs/node/index.ts";
 import { createErrnoError } from "./vfs/errors.ts";
+import type { VfsHookContext } from "./vfs/provider.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
 
 export const SCOPED_RUNNER_GUARANTEES = [
@@ -34,6 +37,10 @@ export const SCOPED_RUNNER_GUARANTEES = [
   "disposable-qemu-vm",
   "full-process-tree-termination",
   "host-observed-process-lifecycle",
+  "per-invocation-cpu",
+  "per-invocation-memory",
+  "per-invocation-pids",
+  "per-invocation-storage",
   "completed-teardown",
 ] as const;
 
@@ -63,7 +70,15 @@ export type ScopedRunnerCeiling = {
     /** Environment variable names which an invocation may project */
     allowedNames: string[];
   };
-  lifecycle: {
+  limits: {
+    /** Maximum complete-tree CPU time in `ms` */
+    maxCpuTimeMs: number;
+    /** Maximum disposable VM memory in `bytes`, aligned to `MiB` */
+    maxMemoryBytes: number;
+    /** Maximum simultaneous entrypoint and descendant process count */
+    maxPids: number;
+    /** Maximum aggregate declared writable state in `bytes` */
+    maxWritableStorageBytes: number;
     /** Maximum combined stdout and stderr in `bytes` */
     maxOutputBytes: number;
     /** Maximum command wall time in `ms` */
@@ -119,7 +134,15 @@ export type ScopedRunnerInvocationRequest = {
     ipc: "none";
     devices: "none";
   };
-  lifecycle: {
+  limits: {
+    /** Complete-tree CPU-time bound in `ms` */
+    cpuTimeMs: number;
+    /** Disposable VM memory bound in `bytes`, aligned to `MiB` */
+    memoryBytes: number;
+    /** Maximum simultaneous entrypoint and descendant process count */
+    pids: number;
+    /** Aggregate declared writable-state bound in `bytes` */
+    writableStorageBytes: number;
     /** Combined stdout and stderr bound in `bytes` */
     outputBytes: number;
     /** Command wall-time bound in `ms` */
@@ -165,6 +188,7 @@ export type ScopedRunnerInvocationEvidence = {
     admission: "scoped-runner/v1";
     filesystem: "exact-ephemeral-vfs/v1";
     process: "landlock-exec/v1";
+    resources: "qemu-cgroup-vfs/v1";
     lifecycle: "one-shot-qemu/v1";
   };
   requested: ScopedRunnerFilesystemEffect[];
@@ -175,6 +199,8 @@ export type ScopedRunnerInvocationEvidence = {
   processEvents: ScopedRunnerProcessEvent[];
   /** SHA-256 digests of final ephemeral write bytes */
   writeDigests: Record<string, string>;
+  /** Execution-bound resource limits, accounting, and exhaustion */
+  resources: ScopedRunnerResourceAccounting;
   startedAt: string;
   settledAt: string;
   teardown: CapabilityTeardownEvidence & {
@@ -184,18 +210,60 @@ export type ScopedRunnerInvocationEvidence = {
     transportClosed: boolean;
     /** Whether ephemeral writable resources were destroyed */
     writableStateDestroyed: boolean;
+    /** Whether the empty guest cgroup was removed before settlement */
+    resourceControllersRemoved: boolean;
   };
 };
 
 export type ScopedRunnerInvocationResult = {
   outcome:
-    CapabilityInvocationOutcome | "policy_denied" | "cancelled" | "guest_crash";
+    | CapabilityInvocationOutcome
+    | "policy_denied"
+    | "cancelled"
+    | "guest_crash"
+    | "cpu_exhausted"
+    | "memory_exhausted"
+    | "pids_exhausted"
+    | "storage_exhausted";
   exitCode: number | null;
   stdout: string;
   stderr: string;
   outputTruncated: boolean;
+  resourceAccounting: ScopedRunnerResourceAccounting;
   evidence: ScopedRunnerInvocationEvidence;
   error?: string;
+};
+
+export type ScopedRunnerResourceAccounting = {
+  /** Execution identity owning every reported counter */
+  executionId: string;
+  limits: ScopedRunnerInvocationRequest["limits"];
+  usage: {
+    /** Host-observed QEMU CPU time since invocation dispatch in `ms` */
+    cpuTimeMs: number;
+    /** Guest-cgroup peak complete-tree memory in `bytes` */
+    memoryPeakBytes: number;
+    /** Guest-cgroup peak simultaneous process-tree members */
+    pidsPeak: number;
+    /** Host-observed aggregate writable state in `bytes` */
+    writableStorageBytes: number;
+    /** Host-observed combined stdout and stderr in `bytes` */
+    outputBytes: number;
+    /** Host-observed invocation wall time in `ms` */
+    wallTimeMs: number;
+  };
+  exhausted:
+    "cpu" | "memory" | "pids" | "storage" | "output" | "wall-time" | null;
+  observations: {
+    cpu: "host-qemu-process";
+    memory: "guest-cgroup-v2";
+    pids: "guest-cgroup-v2";
+    storage: "host-vfs";
+    output: "host-exec-channel";
+    wallTime: "host-monotonic-clock";
+  };
+  /** Whether sandboxd removed the empty guest cgroup */
+  guestResourceGroupRemoved: boolean;
 };
 
 export type CanonicalScopedRunnerRequest = {
@@ -213,7 +281,7 @@ const CEILING_KEYS = [
   "allowedWorkingDirectories",
   "filesystem",
   "environment",
-  "lifecycle",
+  "limits",
   "guarantees",
 ] as const;
 
@@ -223,7 +291,7 @@ const REQUEST_KEYS = [
   "profile",
   "launch",
   "capabilities",
-  "lifecycle",
+  "limits",
   "requiredGuarantees",
 ] as const;
 
@@ -328,11 +396,18 @@ export class ScopedRunnerInvocationContext {
         );
       }
     }
+    const requestedLimits = request.limits;
+    const ceilingLimits = this.ceiling.limits;
     if (
-      request.lifecycle.outputBytes > this.ceiling.lifecycle.maxOutputBytes ||
-      request.lifecycle.wallTimeMs > this.ceiling.lifecycle.maxWallTimeMs
+      requestedLimits.cpuTimeMs > ceilingLimits.maxCpuTimeMs ||
+      requestedLimits.memoryBytes > ceilingLimits.maxMemoryBytes ||
+      requestedLimits.pids > ceilingLimits.maxPids ||
+      requestedLimits.writableStorageBytes >
+        ceilingLimits.maxWritableStorageBytes ||
+      requestedLimits.outputBytes > ceilingLimits.maxOutputBytes ||
+      requestedLimits.wallTimeMs > ceilingLimits.maxWallTimeMs
     ) {
-      widening("invocation lifecycle bounds exceed the immutable ceiling");
+      widening("invocation resource limits exceed the immutable ceiling");
     }
     for (const guarantee of request.requiredGuarantees) {
       if (!this.ceiling.guarantees.includes(guarantee)) {
@@ -359,6 +434,7 @@ export class ScopedRunnerInvocationContext {
     const request = canonical.request;
     const executionId = randomUUID();
     const startedAt = new Date().toISOString();
+    const startedMonotonic = performance.now();
     const attempted: ScopedRunnerFilesystemEffect[] = [];
     const denied: ScopedRunnerFilesystemEffect[] = [];
     const observed: ScopedRunnerFilesystemEffect[] = [];
@@ -392,7 +468,11 @@ export class ScopedRunnerInvocationContext {
     }
 
     const abort = new AbortController();
-    const output = new BoundedOutput(request.lifecycle.outputBytes, abort);
+    const output = new BoundedOutput(request.limits.outputBytes, abort);
+    const storage = new WritableStorageBudget(
+      request.limits.writableStorageBytes,
+      abort,
+    );
     let cancelled = options.signal?.aborted ?? false;
     let timedOut = false;
     const onCancel = () => {
@@ -408,6 +488,7 @@ export class ScopedRunnerInvocationContext {
       attempted,
       denied,
       observed,
+      storage,
     });
     let vm: VM | null = null;
     let vmId = "not-created";
@@ -421,12 +502,16 @@ export class ScopedRunnerInvocationContext {
     let runnerAliveAtFailure = true;
     let admissionError: CapabilityAdmissionError | null = null;
     let timer: NodeJS.Timeout | null = null;
+    let cpuTimer: NodeJS.Timeout | null = null;
+    let cpuObserver: HostCpuObserver | null = null;
+    let hostCpuExhausted = false;
+    let guestUsage: import("./exec.ts").ExecResourceUsage | undefined;
 
     try {
       vm = await VM.create({
         autoStart: false,
         startTimeoutMs: this.runtime.startTimeoutMs,
-        memory: this.runtime.memory,
+        memory: `${request.limits.memoryBytes / MEBIBYTE}M`,
         cpus: this.runtime.cpus,
         rootfs: { mode: "readonly" },
         env: undefined,
@@ -449,6 +534,7 @@ export class ScopedRunnerInvocationContext {
       for (const feature of [
         "exec.clear-env/v1",
         "exec.landlock-allowlist/v1",
+        "exec.resource-limits/v1",
       ]) {
         if (!runtime.guestFeatures.includes(feature)) {
           throw new CapabilityAdmissionError(
@@ -460,14 +546,29 @@ export class ScopedRunnerInvocationContext {
 
       await vm.start();
       runnerPid = vm.getHostPid();
+      if (runnerPid === null) {
+        throw new CapabilityAdmissionError(
+          "unsupported",
+          "QEMU host process identity is unavailable for resource accounting",
+        );
+      }
+      cpuObserver = HostCpuObserver.create(runnerPid);
       timer = setTimeout(() => {
         timedOut = true;
         processEvents.push(
           lifecycleEvent("signal", "wall-time expiry requested VM teardown"),
         );
         abort.abort();
-      }, request.lifecycle.wallTimeMs);
+      }, request.limits.wallTimeMs);
       timer.unref?.();
+      cpuTimer = setInterval(() => {
+        if (!cpuObserver) return;
+        if (cpuObserver.elapsedMs() >= request.limits.cpuTimeMs) {
+          hostCpuExhausted = true;
+          abort.abort();
+        }
+      }, 10);
+      cpuTimer.unref?.();
 
       const executableId = sha256(`executable:${request.launch.executable}`);
       processEvents.push({
@@ -497,16 +598,25 @@ export class ScopedRunnerInvocationContext {
           env: request.capabilities.environment,
           clearEnv: true,
           allowedExecutables,
+          allowedWritablePaths: request.capabilities.filesystem.writes.map(
+            (write) => write.guestPath,
+          ),
+          resourceLimits: {
+            cpuTimeMs: request.limits.cpuTimeMs,
+            memoryBytes: request.limits.memoryBytes,
+            pids: request.limits.pids,
+          },
           signal: abort.signal,
           stdin: false,
           pty: false,
           stdout: output.stdout,
           stderr: output.stderr,
-          windowBytes: Math.min(request.lifecycle.outputBytes + 1, 256 * 1024),
+          windowBytes: Math.min(request.limits.outputBytes + 1, 256 * 1024),
         },
       );
       commandStopped = true;
       exitCode = result.exitCode;
+      guestUsage = result.resourceUsage;
       processEvents.push({
         domain: "process",
         kind: "exit",
@@ -515,19 +625,36 @@ export class ScopedRunnerInvocationContext {
         observedAt: new Date().toISOString(),
       });
       outcome =
-        denied.length > 0
-          ? "policy_denied"
-          : result.exitCode === 0
-            ? "success"
-            : "command_failed";
+        resourceOutcome(result.resourceUsage?.exhausted) ??
+        (storage.exhausted
+          ? "storage_exhausted"
+          : output.overflowed
+            ? "output_overflow"
+            : hostCpuExhausted
+              ? "cpu_exhausted"
+              : denied.length > 0
+                ? "policy_denied"
+                : result.exitCode === 0
+                  ? "success"
+                  : "command_failed");
     } catch (caught) {
       commandStopped = true;
       runnerAliveAtFailure = runnerPid === null || isProcessAlive(runnerPid);
       if (caught instanceof CapabilityAdmissionError) {
         admissionError = caught;
         error = safeError(caught);
+      } else if (isMissingResourceControllerError(caught)) {
+        admissionError = new CapabilityAdmissionError(
+          "unsupported",
+          "required guest resource controllers are unavailable or degraded",
+        );
+        error = safeError(admissionError);
+      } else if (storage.exhausted) {
+        outcome = "storage_exhausted";
       } else if (output.overflowed) {
         outcome = "output_overflow";
+      } else if (hostCpuExhausted) {
+        outcome = "cpu_exhausted";
       } else if (cancelled) {
         outcome = "cancelled";
         processEvents.push(
@@ -543,6 +670,7 @@ export class ScopedRunnerInvocationContext {
       error ??= safeError(caught);
     } finally {
       if (timer) clearTimeout(timer);
+      if (cpuTimer) clearInterval(cpuTimer);
       options.signal?.removeEventListener("abort", onCancel);
       if (vm) {
         runnerPid ??= vm.getHostPid();
@@ -573,6 +701,35 @@ export class ScopedRunnerInvocationContext {
       );
     }
     const settledAt = new Date().toISOString();
+    const wallTimeMs = Math.max(
+      0,
+      Math.ceil(performance.now() - startedMonotonic),
+    );
+    const exhausted = outcomeToExhausted(outcome);
+    const resourceAccounting: ScopedRunnerResourceAccounting = {
+      executionId,
+      limits: request.limits,
+      usage: {
+        cpuTimeMs: Math.ceil(
+          cpuObserver?.elapsedMs() ?? guestUsage?.cpuTimeMs ?? 0,
+        ),
+        memoryPeakBytes: guestUsage?.memoryPeakBytes ?? 0,
+        pidsPeak: guestUsage?.pidsPeak ?? 0,
+        writableStorageBytes: storage.usedBytes,
+        outputBytes: output.acceptedBytes,
+        wallTimeMs,
+      },
+      exhausted,
+      observations: {
+        cpu: "host-qemu-process",
+        memory: "guest-cgroup-v2",
+        pids: "guest-cgroup-v2",
+        storage: "host-vfs",
+        output: "host-exec-channel",
+        wallTime: "host-monotonic-clock",
+      },
+      guestResourceGroupRemoved: guestUsage?.resourceGroupRemoved ?? false,
+    };
     processEvents.push(
       lifecycleEvent(
         "teardown",
@@ -590,6 +747,7 @@ export class ScopedRunnerInvocationContext {
       processTreeEmpty: teardownComplete,
       transportClosed: teardownComplete,
       writableStateDestroyed: teardownComplete,
+      resourceControllersRemoved: teardownComplete,
       completedAt: teardownComplete ? settledAt : null,
     };
 
@@ -599,6 +757,7 @@ export class ScopedRunnerInvocationContext {
       stdout: output.stdoutText,
       stderr: output.stderrText,
       outputTruncated: output.overflowed,
+      resourceAccounting,
       evidence: {
         schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
         requestDigest: canonical.digest,
@@ -610,6 +769,7 @@ export class ScopedRunnerInvocationContext {
           admission: "scoped-runner/v1",
           filesystem: "exact-ephemeral-vfs/v1",
           process: "landlock-exec/v1",
+          resources: "qemu-cgroup-vfs/v1",
           lifecycle: "one-shot-qemu/v1",
         },
         requested,
@@ -619,6 +779,7 @@ export class ScopedRunnerInvocationContext {
         observed,
         processEvents,
         writeDigests,
+        resources: resourceAccounting,
         startedAt,
         settledAt,
         teardown,
@@ -658,7 +819,7 @@ class BoundedOutput {
   readonly stdout = new CollectingSink(this);
   readonly stderr = new CollectingSink(this);
   overflowed = false;
-  private acceptedBytes = 0;
+  private accepted = 0;
   private readonly limit: number;
   private readonly abort: AbortController;
   constructor(limit: number, abort: AbortController) {
@@ -666,9 +827,9 @@ class BoundedOutput {
     this.abort = abort;
   }
   accept(sink: CollectingSink, data: Buffer): void {
-    const remaining = Math.max(0, this.limit - this.acceptedBytes);
+    const remaining = Math.max(0, this.limit - this.accepted);
     if (remaining > 0) sink.chunks.push(data.subarray(0, remaining));
-    this.acceptedBytes += Math.min(remaining, data.length);
+    this.accepted += Math.min(remaining, data.length);
     if (data.length > remaining && !this.overflowed) {
       this.overflowed = true;
       this.abort.abort();
@@ -679,6 +840,101 @@ class BoundedOutput {
   }
   get stderrText(): string {
     return Buffer.concat(this.stderr.chunks).toString("utf8");
+  }
+  get acceptedBytes(): number {
+    return this.accepted;
+  }
+}
+
+class WritableStorageBudget {
+  readonly limit: number;
+  exhausted = false;
+  private readonly sizes = new Map<string, number>();
+  private readonly abort: AbortController;
+
+  constructor(limit: number, abort: AbortController) {
+    this.limit = limit;
+    this.abort = abort;
+  }
+
+  reserve(providerPath: string, context: VfsHookContext): void {
+    const previous = this.sizes.get(providerPath) ?? 0;
+    let next = previous;
+    if (context.op === "truncate") next = context.size ?? 0;
+    else if (context.op === "writeFile") next = context.data?.length ?? 0;
+    else if (context.op === "open" && isTruncatingOpen(context.flags)) next = 0;
+    else if (/write/i.test(context.op)) {
+      const length = context.length ?? context.data?.length ?? 0;
+      next =
+        context.offset === undefined
+          ? previous + length
+          : Math.max(previous, context.offset + length);
+    }
+    const projected = this.usedBytes - previous + next;
+    if (projected > this.limit) {
+      this.exhausted = true;
+      this.abort.abort();
+      throw createErrnoError(ERRNO.ENOSPC, context.op, context.path);
+    }
+    this.sizes.set(providerPath, next);
+  }
+
+  get usedBytes(): number {
+    let total = 0;
+    for (const size of this.sizes.values()) total += size;
+    return total;
+  }
+}
+
+class HostCpuObserver {
+  private readonly pid: number;
+  private readonly ticksPerSecond: number;
+  private readonly baselineMs: number;
+  private lastMs: number;
+
+  private constructor(pid: number, ticksPerSecond: number, baselineMs: number) {
+    this.pid = pid;
+    this.ticksPerSecond = ticksPerSecond;
+    this.baselineMs = baselineMs;
+    this.lastMs = baselineMs;
+  }
+
+  static create(pid: number): HostCpuObserver {
+    if (process.platform !== "linux") {
+      throw new CapabilityAdmissionError(
+        "unsupported",
+        `host-observed QEMU CPU accounting is unsupported on ${process.platform}`,
+      );
+    }
+    let ticksPerSecond: number;
+    try {
+      ticksPerSecond = Number(
+        execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim(),
+      );
+    } catch {
+      throw new CapabilityAdmissionError(
+        "unsupported",
+        "host clock-tick accounting controller is unavailable",
+      );
+    }
+    if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
+      throw new CapabilityAdmissionError(
+        "unsupported",
+        "host clock-tick accounting controller is degraded",
+      );
+    const baseline = readLinuxProcessCpuMs(pid, ticksPerSecond);
+    if (baseline === null)
+      throw new CapabilityAdmissionError(
+        "unsupported",
+        "QEMU process CPU accounting is unavailable",
+      );
+    return new HostCpuObserver(pid, ticksPerSecond, baseline);
+  }
+
+  elapsedMs(): number {
+    const current = readLinuxProcessCpuMs(this.pid, this.ticksPerSecond);
+    if (current !== null) this.lastMs = current;
+    return Math.max(0, this.lastMs - this.baselineMs);
   }
 }
 
@@ -701,11 +957,18 @@ function normalizeCeiling(input: unknown): ScopedRunnerCeiling {
   );
   const environment = object(root.environment, "ceiling.environment");
   exactKeys(environment, ["allowedNames"], "ceiling.environment");
-  const lifecycle = object(root.lifecycle, "ceiling.lifecycle");
+  const limits = object(root.limits, "ceiling.limits");
   exactKeys(
-    lifecycle,
-    ["maxOutputBytes", "maxWallTimeMs"],
-    "ceiling.lifecycle",
+    limits,
+    [
+      "maxCpuTimeMs",
+      "maxMemoryBytes",
+      "maxPids",
+      "maxWritableStorageBytes",
+      "maxOutputBytes",
+      "maxWallTimeMs",
+    ],
+    "ceiling.limits",
   );
 
   const ceiling: ScopedRunnerCeiling = {
@@ -764,14 +1027,35 @@ function normalizeCeiling(input: unknown): ScopedRunnerCeiling {
         ),
       ),
     },
-    lifecycle: {
-      maxOutputBytes: positiveInteger(
-        lifecycle.maxOutputBytes,
-        "ceiling.lifecycle.maxOutputBytes",
+    limits: {
+      maxCpuTimeMs: resourceInteger(
+        limits.maxCpuTimeMs,
+        "ceiling.limits.maxCpuTimeMs",
+        86_400_000,
       ),
-      maxWallTimeMs: positiveInteger(
-        lifecycle.maxWallTimeMs,
-        "ceiling.lifecycle.maxWallTimeMs",
+      maxMemoryBytes: memoryBytes(
+        limits.maxMemoryBytes,
+        "ceiling.limits.maxMemoryBytes",
+      ),
+      maxPids: resourceInteger(
+        limits.maxPids,
+        "ceiling.limits.maxPids",
+        65_535,
+      ),
+      maxWritableStorageBytes: resourceInteger(
+        limits.maxWritableStorageBytes,
+        "ceiling.limits.maxWritableStorageBytes",
+        1_099_511_627_776,
+      ),
+      maxOutputBytes: resourceInteger(
+        limits.maxOutputBytes,
+        "ceiling.limits.maxOutputBytes",
+        1_099_511_627_776,
+      ),
+      maxWallTimeMs: resourceInteger(
+        limits.maxWallTimeMs,
+        "ceiling.limits.maxWallTimeMs",
+        86_400_000,
       ),
     },
     guarantees: normalizeGuarantees(root.guarantees, "ceiling.guarantees"),
@@ -956,8 +1240,19 @@ function normalizeRequest(input: unknown): ScopedRunnerInvocationRequest {
     !descendantExecutables.length
   )
     invalid("allow-list descendant policy requires at least one executable");
-  const lifecycle = object(root.lifecycle, "request.lifecycle");
-  exactKeys(lifecycle, ["outputBytes", "wallTimeMs"], "request.lifecycle");
+  const limits = object(root.limits, "request.limits");
+  exactKeys(
+    limits,
+    [
+      "cpuTimeMs",
+      "memoryBytes",
+      "pids",
+      "writableStorageBytes",
+      "outputBytes",
+      "wallTimeMs",
+    ],
+    "request.limits",
+  );
   const requiredGuarantees = normalizeGuarantees(
     root.requiredGuarantees,
     "request.requiredGuarantees",
@@ -991,14 +1286,31 @@ function normalizeRequest(input: unknown): ScopedRunnerInvocationRequest {
       ipc: "none",
       devices: "none",
     },
-    lifecycle: {
-      outputBytes: positiveInteger(
-        lifecycle.outputBytes,
-        "request.lifecycle.outputBytes",
+    limits: {
+      cpuTimeMs: resourceInteger(
+        limits.cpuTimeMs,
+        "request.limits.cpuTimeMs",
+        86_400_000,
       ),
-      wallTimeMs: positiveInteger(
-        lifecycle.wallTimeMs,
-        "request.lifecycle.wallTimeMs",
+      memoryBytes: memoryBytes(
+        limits.memoryBytes,
+        "request.limits.memoryBytes",
+      ),
+      pids: resourceInteger(limits.pids, "request.limits.pids", 65_535),
+      writableStorageBytes: resourceInteger(
+        limits.writableStorageBytes,
+        "request.limits.writableStorageBytes",
+        1_099_511_627_776,
+      ),
+      outputBytes: resourceInteger(
+        limits.outputBytes,
+        "request.limits.outputBytes",
+        1_099_511_627_776,
+      ),
+      wallTimeMs: resourceInteger(
+        limits.wallTimeMs,
+        "request.limits.wallTimeMs",
+        86_400_000,
       ),
     },
     requiredGuarantees,
@@ -1011,13 +1323,10 @@ function createScopedHooks(options: {
   attempted: ScopedRunnerFilesystemEffect[];
   denied: ScopedRunnerFilesystemEffect[];
   observed: ScopedRunnerFilesystemEffect[];
+  storage: WritableStorageBudget;
 }) {
   return {
-    before(context: {
-      op: string;
-      path?: string;
-      flags?: string | number;
-    }): void {
+    before(context: VfsHookContext): void {
       const providerPath = normalizeProviderPath(context.path ?? "/");
       const guestPath = toGuestPath(providerPath);
       const operation = classifyOperation(context.op, context.flags);
@@ -1042,12 +1351,15 @@ function createScopedHooks(options: {
         options.denied.push({ ...effect, decision: "denied" });
         throw createErrnoError(ERRNO.EACCES, context.op, context.path);
       }
+      if (
+        policy !== undefined &&
+        options.writes.has(providerPath) &&
+        (operation === "write" || operation === "truncate")
+      ) {
+        options.storage.reserve(providerPath, context);
+      }
     },
-    after(context: {
-      op: string;
-      path?: string;
-      flags?: string | number;
-    }): void {
+    after(context: VfsHookContext): void {
       const providerPath = normalizeProviderPath(context.path ?? "/");
       const policy =
         options.reads.get(providerPath) ?? options.writes.get(providerPath);
@@ -1331,6 +1643,24 @@ function positiveInteger(value: unknown, label: string): number {
   return value;
 }
 
+function resourceInteger(
+  value: unknown,
+  label: string,
+  maximum: number,
+): number {
+  const result = positiveInteger(value, label);
+  if (result > maximum)
+    invalid(`${label} exceeds the supported maximum ${maximum}`);
+  return result;
+}
+
+function memoryBytes(value: unknown, label: string): number {
+  const result = resourceInteger(value, label, 64 * 1024 * MEBIBYTE);
+  if (result < 128 * MEBIBYTE || result % MEBIBYTE !== 0)
+    invalid(`${label} must be a whole MiB between 128 MiB and 64 GiB`);
+  return result;
+}
+
 function boolean(value: unknown, label: string): asserts value is boolean {
   if (typeof value !== "boolean") invalid(`${label} must be a boolean`);
 }
@@ -1427,6 +1757,55 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+const MEBIBYTE = 1024 * 1024;
+
+function readLinuxProcessCpuMs(
+  pid: number,
+  ticksPerSecond: number,
+): number | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const closingParen = stat.lastIndexOf(")");
+    if (closingParen < 0) return null;
+    const fields = stat
+      .slice(closingParen + 2)
+      .trim()
+      .split(/\s+/);
+    const userTicks = Number(fields[11]);
+    const systemTicks = Number(fields[12]);
+    if (!Number.isFinite(userTicks) || !Number.isFinite(systemTicks))
+      return null;
+    return ((userTicks + systemTicks) * 1000) / ticksPerSecond;
+  } catch {
+    return null;
+  }
+}
+
+function resourceOutcome(
+  exhausted: import("./exec.ts").ExecResourceUsage["exhausted"] | undefined,
+): ScopedRunnerInvocationResult["outcome"] | null {
+  if (exhausted === "cpu") return "cpu_exhausted";
+  if (exhausted === "memory") return "memory_exhausted";
+  if (exhausted === "pids") return "pids_exhausted";
+  return null;
+}
+
+function outcomeToExhausted(
+  outcome: ScopedRunnerInvocationResult["outcome"],
+): ScopedRunnerResourceAccounting["exhausted"] {
+  if (outcome === "cpu_exhausted") return "cpu";
+  if (outcome === "memory_exhausted") return "memory";
+  if (outcome === "pids_exhausted") return "pids";
+  if (outcome === "storage_exhausted") return "storage";
+  if (outcome === "output_overflow") return "output";
+  if (outcome === "timeout") return "wall-time";
+  return null;
+}
+
+function isMissingResourceControllerError(error: unknown): boolean {
+  return /resource_controller_unavailable/.test(safeError(error));
+}
+
 function unavailableRuntimeIdentity(): VmRuntimeIdentity {
   return {
     vmm: "qemu",
@@ -1442,3 +1821,10 @@ function unavailableRuntimeIdentity(): VmRuntimeIdentity {
 function safeError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 512);
 }
+
+/** @internal */
+export const __test = {
+  WritableStorageBudget,
+  resourceOutcome,
+  outcomeToExhausted,
+};

@@ -536,7 +536,11 @@ export function writeAssetManifest(
   const manifest: AssetManifest = {
     version: 1,
     buildId: computeAssetBuildId({ checksums, arch: config.arch }),
-    guestFeatures: ["exec.clear-env/v1", "exec.landlock-allowlist/v1"],
+    guestFeatures: [
+      "exec.clear-env/v1",
+      "exec.landlock-allowlist/v1",
+      "exec.resource-limits/v1",
+    ],
     config,
     buildTime: new Date().toISOString(),
     assets,

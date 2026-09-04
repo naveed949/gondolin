@@ -715,6 +715,7 @@ export class SandboxServer extends EventEmitter {
             id: message.id,
             exit_code: message.p.exit_code,
             signal: message.p.signal,
+            resource_usage: message.p.resource_usage,
           });
         }
         this.inflight.delete(message.id);

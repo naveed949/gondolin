@@ -102,9 +102,11 @@ ceiling is created. Every invocation opens it without following the final symlin
 verifies the descriptor still has that identity, and copies it into an
 invocation-private, read-only VFS snapshot. Version 1 requires its guest path to
 be a direct child of `/data`. With `network: "none"`, the network device is
-disabled exactly as in the original profile. In both variants the guest process
-receives an explicitly empty environment. Output and wall time are bounded before
-the process starts, and the base guest root filesystem is attached read-only.
+disabled exactly as in the original profile. Without credential projections the
+guest process receives an explicitly empty environment; credential-aware
+invocations receive only their fresh placeholders. Output and wall time are
+bounded before the process starts, and the base guest root filesystem is
+attached read-only.
 
 ## HTTP/TLS egress rules
 
@@ -137,6 +139,146 @@ HTTP/3, QUIC, and other UDP transports are separate unsupported features and
 fail closed. The network stack and upstream connection pools belong to the
 fresh VM and are closed before a network-enabled invocation settles.
 
+## Destination-bound HTTP/TLS credentials
+
+The exact-reader HTTP/TLS profile can project credentials without putting real
+values in capability policy. Values live in a separate trusted host store;
+ceilings and requests contain only opaque references and exact authority:
+
+```ts
+import {
+  CapabilityCredentialStore,
+  CapabilityInvocationContext,
+  DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
+  EXACT_READER_GUARANTEES,
+  HTTP_TLS_EGRESS_GUARANTEES,
+} from "@earendil-works/gondolin";
+
+const credentialStore = CapabilityCredentialStore.create({
+  "credential/github-api": {
+    value: process.env.GITHUB_TOKEN!,
+    redactionId: "github-api-token",
+    protocol: "tls",
+    destination: "api.github.com",
+    port: 443,
+    methods: ["GET"],
+    expiresAt: "2030-01-01T00:00:00Z",
+  },
+});
+
+const projection = {
+  reference: "credential/github-api",
+  projection: "GITHUB_TOKEN",
+  redactionId: "github-api-token",
+  protocol: "tls" as const,
+  destination: "api.github.com",
+  port: 443,
+  methods: ["GET" as const],
+  validity: { expiresAt: "2030-01-01T00:00:00Z" },
+};
+
+const context = CapabilityInvocationContext.create(
+  {
+    schemaVersion: "gondolin.capability-ceiling/v1",
+    profile: "exact-reader",
+    allowedExecutables: ["/bin/sh"],
+    filesystem: {
+      sourcePaths: ["/srv/inputs/request.txt"],
+      guestPaths: ["/data/input.txt"],
+    },
+    network: {
+      rules: [
+        {
+          protocol: "tls",
+          destination: "api.github.com",
+          port: 443,
+          methods: ["GET"],
+          redirects: "deny",
+          resolution: "checked-host",
+          internalRanges: "deny",
+        },
+      ],
+    },
+    credentials: { projections: [projection] },
+    limits: { maxOutputBytes: 64 * 1024, maxWallTimeMs: 10_000 },
+    guarantees: [
+      ...EXACT_READER_GUARANTEES,
+      ...HTTP_TLS_EGRESS_GUARANTEES,
+      ...DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
+    ],
+  },
+  { credentialStore },
+);
+
+const result = await context.invoke({
+  schemaVersion: "gondolin.capability-invocation/v1",
+  invocationId: "github-user-001",
+  profile: "exact-reader",
+  launch: {
+    executable: "/bin/sh",
+    args: [
+      "-c",
+      'wget -qO- --header="Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user',
+    ],
+  },
+  capabilities: {
+    filesystem: {
+      sourcePath: "/srv/inputs/request.txt",
+      guestPath: "/data/input.txt",
+      operations: ["read"],
+    },
+    network: {
+      rules: [
+        {
+          protocol: "tls",
+          destination: "api.github.com",
+          port: 443,
+          methods: ["GET"],
+          redirects: "deny",
+          resolution: "checked-host",
+          internalRanges: "deny",
+        },
+      ],
+    },
+    environment: {},
+    credentials: { projections: [projection] },
+  },
+  limits: { outputBytes: 32 * 1024, wallTimeMs: 5_000 },
+  requiredGuarantees: [
+    ...HTTP_TLS_EGRESS_GUARANTEES,
+    ...DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
+  ],
+});
+```
+
+`value` is accepted only by `CapabilityCredentialStore`, never by a capability
+ceiling or request. Admission intersects a projection's reference, environment
+name, redaction identity, protocol, exact destination, port, methods, and
+validity with both the immutable credential ceiling and active network grant.
+Duplicate references or projection names are ambiguous and rejected.
+
+Every invocation gets a fresh, execution-bound placeholder. The live host store
+is checked at each redemption, so missing, deleted, revoked, not-yet-valid,
+expired, or scope-mismatched entries fail before the affected request is sent.
+`credentialStore.set()` rotates a value, `revoke()` disables a reference, and
+`delete()` removes it from use. A placeholder from a completed or different
+invocation is recognized as stale and denied rather than forwarded.
+
+Substitution is limited to HTTP request headers, including placeholders inside
+Basic authentication. Query strings and request bodies are not credential
+transports. Each redirect hop and rewritten method is re-authorized, DNS and
+connection addresses retain the HTTP/TLS checks above, and disposable-VM
+connection pools cannot transfer credential authority between invocations.
+
+Credential evidence retains only the SHA-256 reference identity, projection,
+redaction identity, exact destination scope, operation, and safe denial reason.
+Current and rotated/revoked values are redacted from response headers and
+bodies before they reach the guest and again from captured output and errors.
+Teardown clears the mediator's placeholder table and reports
+`credentialProjectionsRevoked` before successful settlement. Raw TCP, SSH,
+WebSocket, query, body, and external broker credential transports remain
+unsupported.
+
 The selected image must declare `exec.clear-env/v1` in its bound asset manifest.
 Older images that do not advertise the guest-side clean-environment
 implementation are rejected before the VM is started.
@@ -155,9 +297,12 @@ Use `getCapabilityInvocationFeatureManifest()` before requiring a feature. The
 manifest reports HTTP/1.x, TLS-mediated HTTP/1.x, checked host resolution,
 redirect reauthorization, internal-range handling, and synthetic DNS separately
 from raw TCP, SSH, WebSockets, HTTP/2, HTTP/3, QUIC, trusted DNS, and open DNS.
-It also marks libkrun, Windows, host-platform qualification, general runners,
-credentials, Git, IPC, devices,
-and unimplemented resource controls as unsupported or unverified. A required
+It reports destination-bound HTTP/TLS header credentials independently from
+unsupported query, body, raw TCP, SSH, and external broker credential
+transports. It also marks libkrun, Windows, host-platform qualification,
+general runners, Git, IPC, and devices as unsupported or unverified.
+Scoped-runner resource controls are active only on their documented QEMU/Linux
+path and still require exact runtime qualification. A required
 feature that is not active must not be treated as degraded success.
 
 ## Exact-writer v1
@@ -262,7 +407,14 @@ const runner = ScopedRunnerInvocationContext.create({
     writeGuestPaths: ["/data/cache/output.bin"],
   },
   environment: { allowedNames: ["BUILD_MODE"] },
-  lifecycle: { maxOutputBytes: 64 * 1024, maxWallTimeMs: 10_000 },
+  limits: {
+    maxCpuTimeMs: 10_000,
+    maxMemoryBytes: 512 * 1024 * 1024,
+    maxPids: 64,
+    maxWritableStorageBytes: 128 * 1024 * 1024,
+    maxOutputBytes: 64 * 1024,
+    maxWallTimeMs: 10_000,
+  },
   guarantees: [...SCOPED_RUNNER_GUARANTEES],
 });
 
@@ -303,7 +455,14 @@ const result = await runner.invoke({
     ipc: "none",
     devices: "none",
   },
-  lifecycle: { outputBytes: 32 * 1024, wallTimeMs: 5_000 },
+  limits: {
+    cpuTimeMs: 5_000,
+    memoryBytes: 256 * 1024 * 1024,
+    pids: 16,
+    writableStorageBytes: 64 * 1024 * 1024,
+    outputBytes: 32 * 1024,
+    wallTimeMs: 5_000,
+  },
   requiredGuarantees: [...SCOPED_RUNNER_GUARANTEES],
 });
 ```
@@ -327,14 +486,42 @@ entrypoint; it does not claim a general prohibition on `fork` or entrypoint
 re-execution. Accordingly, `process.descendants-denied` remains unsupported in
 the feature manifest while the exact descendant allow-list is active.
 
-Cancellation, wall-time expiry, output overflow, policy denial, guest crash,
-transport failure, and teardown failure have distinct structured outcomes. The
-call settles only after the disposable QEMU process has stopped, which proves
-that the invocation process tree is empty and revokes its VFS, executable
-policy, transport, and writable state. Process lifecycle and filesystem effects
-are bound to the canonical request, immutable ceiling, execution identity,
-image, kernel, and VMM identities.
+Each request independently contracts CPU time (`ms`), VM/process-tree memory
+(`bytes`), simultaneous PIDs, aggregate exact-file writable storage (`bytes`),
+combined output (`bytes`), and wall time (`ms`). Memory values are whole MiB
+from 128 MiB through 64 GiB because the value is also the QEMU VM memory size.
+The runtime `memory` option does not widen that request-selected VM boundary.
 
-The scoped-runner slice does not claim complete CPU, memory, PID, or writable
-storage budgets. Those guarantees remain `unsupported` in the feature manifest
-until their separate conformance slice is implemented.
+Resource admission is fail closed. The selected image must declare
+`exec.resource-limits/v1`; sandboxd must create cgroup-v2 CPU-accounting,
+memory, and PID controllers before releasing the child start gate; the QEMU
+host PID and Linux `/proc` CPU accounting must also be available before the
+entrypoint is dispatched. A degraded controller returns an `unsupported`
+admission error after disposal of the unstarted invocation VM.
+
+The cgroup contains the entrypoint before its first instruction and every fork
+inherits membership. Linux Landlock simultaneously denies file creation,
+namespace mutation, writes, and truncates outside the declared exact writable
+files, so temporary directories, caches, root state, and other ambient guest
+paths cannot become an unaccounted writable escape. The host VFS stops and
+tears down the VM before an exact-file write can cross
+`writableStorageBytes`.
+
+CPU, memory, PID, storage, output, and wall-time exhaustion return respectively
+`cpu_exhausted`, `memory_exhausted`, `pids_exhausted`, `storage_exhausted`,
+`output_overflow`, and `timeout`. `resourceAccounting` binds the contracted
+limits, host-observed QEMU CPU time, guest-cgroup peaks, host-observed writable
+and output bytes, monotonic wall time, and terminating controller to the
+execution identity. Guest-cgroup values are explicitly identified as guest
+observations rather than host attestations.
+
+The call settles only after the disposable QEMU process has stopped. Teardown
+is complete only when that boundary proves the process tree empty and the VFS,
+resource controllers, transport, and writable state are gone. If sandboxd
+returns normally it additionally reports whether it emptied and removed its
+cgroup before responding.
+
+This resource profile currently runs only on QEMU on Linux. libkrun remains
+`unverified`, Windows remains `unsupported`, and the general Linux host entry
+remains `unverified` until an exact released image, kernel, architecture, and
+conformance bundle combination passes the non-skipping qualification suite.

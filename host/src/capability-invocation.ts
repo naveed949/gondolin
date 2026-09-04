@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -7,8 +7,13 @@ import { domainToASCII } from "node:url";
 
 import { VM, type VmRuntimeIdentity } from "./vm/core.ts";
 import type { ImagePath } from "./sandbox/server-options.ts";
-import type { HttpHooks, HttpIpAllowInfo } from "./qemu/contracts.ts";
+import {
+  ON_REQUEST_EARLY_POLICY_SAFE,
+  type HttpHooks,
+  type HttpIpAllowInfo,
+} from "./qemu/contracts.ts";
 import { extractIPv4Mapped, parseIPv6Hextets } from "./utils/ip.ts";
+import { HttpRequestBlockedError } from "./http/utils.ts";
 import { MemoryProvider } from "./vfs/node/index.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
@@ -41,9 +46,17 @@ export const HTTP_TLS_EGRESS_GUARANTEES = [
   "network-channel-teardown",
 ] as const;
 
+export const DESTINATION_BOUND_CREDENTIAL_GUARANTEES = [
+  "destination-bound-credentials",
+  "invocation-credential-identity",
+  "credential-redaction",
+  "credential-teardown",
+] as const;
+
 export type ExactReaderGuarantee =
   | (typeof EXACT_READER_GUARANTEES)[number]
-  | (typeof HTTP_TLS_EGRESS_GUARANTEES)[number];
+  | (typeof HTTP_TLS_EGRESS_GUARANTEES)[number]
+  | (typeof DESTINATION_BOUND_CREDENTIAL_GUARANTEES)[number];
 
 export type CapabilityHttpMethod =
   "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
@@ -67,6 +80,170 @@ export type CapabilityNetworkRule = {
 
 export type CapabilityNetworkAuthority =
   "none" | { /** Exact HTTP/TLS authorities */ rules: CapabilityNetworkRule[] };
+
+export type CapabilityCredentialValidity = {
+  /** Earliest permitted redemption timestamp */
+  notBefore?: string;
+  /** Last permitted redemption timestamp */
+  expiresAt?: string;
+};
+
+export type CapabilityCredentialProjection = {
+  /** Opaque trusted-controller credential reference */
+  reference: string;
+  /** Guest-visible environment variable name */
+  projection: string;
+  /** Safe identity retained in evidence and logs */
+  redactionId: string;
+  /** Exact content-aware transport */
+  protocol: "http" | "tls";
+  /** Exact normalized DNS hostname or IP address */
+  destination: string;
+  /** Exact destination TCP port */
+  port: number;
+  /** Uppercase HTTP methods permitted to redeem the placeholder */
+  methods: CapabilityHttpMethod[];
+  /** Invocation-declared credential validity contraction */
+  validity: CapabilityCredentialValidity;
+};
+
+export type CapabilityCredentialAuthority =
+  | "none"
+  | {
+      /** Invocation-bound destination credential projections */ projections: CapabilityCredentialProjection[];
+    };
+
+export type TrustedCapabilityCredential = {
+  /** Secret value retained only in trusted host state */
+  value: string;
+  /** Safe identity that must match capability policy */
+  redactionId: string;
+  /** Exact content-aware transport */
+  protocol: "http" | "tls";
+  /** Exact normalized DNS hostname or IP address */
+  destination: string;
+  /** Exact destination TCP port */
+  port: number;
+  /** Uppercase HTTP methods permitted by trusted configuration */
+  methods: CapabilityHttpMethod[];
+  /** Host-authoritative earliest redemption timestamp */
+  notBefore?: string;
+  /** Host-authoritative last redemption timestamp */
+  expiresAt?: string;
+};
+
+type StoredCapabilityCredential = TrustedCapabilityCredential & {
+  reference: string;
+  revoked: boolean;
+  deleted: boolean;
+  revision: number;
+};
+
+/** Mutable trusted host credential configuration used by capability invocations */
+export class CapabilityCredentialStore {
+  private readonly entries = new Map<string, StoredCapabilityCredential>();
+  private readonly redactionHistory = new Set<string>();
+
+  constructor(credentials: Record<string, TrustedCapabilityCredential> = {}) {
+    for (const [reference, credential] of Object.entries(credentials)) {
+      this.set(reference, credential);
+    }
+  }
+
+  /** Create a trusted credential store without placing values in capability policy */
+  static create(
+    credentials: Record<string, TrustedCapabilityCredential> = {},
+  ): CapabilityCredentialStore {
+    return new CapabilityCredentialStore(credentials);
+  }
+
+  /** Add or rotate one host-side credential */
+  set(reference: string, credential: TrustedCapabilityCredential): void {
+    const normalizedReference = credentialIdentifier(
+      reference,
+      "credential reference",
+    );
+    const normalized = normalizeTrustedCredential(
+      credential,
+      `trusted credential ${normalizedReference}`,
+    );
+    if (normalized.value.includes("GONDOLIN_CREDENTIAL_")) {
+      invalid(
+        "trusted credential value overlaps the reserved placeholder namespace",
+      );
+    }
+    for (const [otherReference, entry] of this.entries) {
+      if (
+        otherReference !== normalizedReference &&
+        !entry.deleted &&
+        entry.value === normalized.value
+      ) {
+        invalid(
+          "trusted credential values must be unambiguous across references",
+        );
+      }
+    }
+    const previous = this.entries.get(normalizedReference);
+    if (previous) this.redactionHistory.add(previous.value);
+    this.redactionHistory.add(normalized.value);
+    this.entries.set(normalizedReference, {
+      ...normalized,
+      reference: normalizedReference,
+      revoked: false,
+      deleted: false,
+      revision: (previous?.revision ?? 0) + 1,
+    });
+  }
+
+  /** Revoke one reference while retaining its values for redaction */
+  revoke(reference: string): void {
+    const entry = this.require(reference);
+    entry.revoked = true;
+    entry.revision += 1;
+  }
+
+  /** Delete one reference while retaining its values for redaction */
+  delete(reference: string): void {
+    const entry = this.require(reference);
+    entry.deleted = true;
+    entry.revoked = true;
+    entry.revision += 1;
+  }
+
+  /** Safe metadata for trusted-controller inspection */
+  inspect(reference: string): {
+    redactionId: string;
+    revoked: boolean;
+    deleted: boolean;
+    revision: number;
+  } | null {
+    const entry = this.entries.get(reference);
+    return entry
+      ? {
+          redactionId: entry.redactionId,
+          revoked: entry.revoked,
+          deleted: entry.deleted,
+          revision: entry.revision,
+        }
+      : null;
+  }
+
+  /** @internal */
+  resolve(reference: string): StoredCapabilityCredential | null {
+    return this.entries.get(reference) ?? null;
+  }
+
+  /** @internal */
+  sensitiveValues(): string[] {
+    return [...this.redactionHistory].filter(Boolean);
+  }
+
+  private require(reference: string): StoredCapabilityCredential {
+    const entry = this.entries.get(reference);
+    if (!entry) throw new Error(`unknown credential reference: ${reference}`);
+    return entry;
+  }
+}
 
 export const EXACT_WRITER_GUARANTEES = [
   "canonical-request",
@@ -101,6 +278,8 @@ export type ExactReaderCeiling = {
   };
   /** Maximum invocation network authority; omitted is equivalent to `none` */
   network?: CapabilityNetworkAuthority;
+  /** Maximum destination-bound credential authority */
+  credentials?: CapabilityCredentialAuthority;
   limits: {
     /** Maximum combined stdout and stderr in `bytes` */
     maxOutputBytes: number;
@@ -137,6 +316,8 @@ export type ExactReaderInvocationRequest = {
     network: CapabilityNetworkAuthority;
     /** Explicit environment projection, fixed to empty in this profile */
     environment: Record<string, never>;
+    /** Invocation-bound host credential projections */
+    credentials?: CapabilityCredentialAuthority;
   };
   limits: {
     /** Combined stdout and stderr bound in `bytes` */
@@ -233,6 +414,8 @@ export type CapabilityInvocationRuntimeOptions = {
   cpus?: number;
   /** Guest startup timeout in `ms` */
   startTimeoutMs?: number;
+  /** Trusted host credential configuration */
+  credentialStore?: CapabilityCredentialStore;
 };
 
 export type CapabilityEffectDecision =
@@ -287,8 +470,36 @@ export type CapabilityNetworkEffect = {
   decision: CapabilityEffectDecision;
 };
 
+export type CapabilityCredentialEffect = {
+  /** Capability domain */
+  domain: "credential";
+  /** Host-observed credential lifecycle operation */
+  operation: "projection" | "use" | "denial" | "expiry" | "revocation";
+  /** SHA-256 opaque-reference identity */
+  referenceId: string;
+  /** Guest-visible projection name */
+  projection: string;
+  /** Safe configured redaction identity */
+  redactionId: string;
+  /** Exact content-aware transport */
+  protocol: "http" | "tls";
+  /** Exact normalized destination */
+  destination: string;
+  /** Exact destination TCP port */
+  port: number;
+  /** Uppercase HTTP method when redemption was attempted */
+  method?: string;
+  /** Non-sensitive denial classification */
+  reason?:
+    "missing" | "expired" | "revoked" | "mismatch" | "stale" | "inactive";
+  /** Relationship of this event to enforcement */
+  decision: CapabilityEffectDecision;
+};
+
 export type CapabilityEffect =
-  CapabilityFilesystemEffect | CapabilityNetworkEffect;
+  | CapabilityFilesystemEffect
+  | CapabilityNetworkEffect
+  | CapabilityCredentialEffect;
 
 export type CapabilityTeardownEvidence = {
   /** Whether the command transport has stopped */
@@ -301,6 +512,8 @@ export type CapabilityTeardownEvidence = {
   policyRemoved: boolean;
   /** Whether every invocation network channel has been closed */
   networkChannelsClosed?: boolean;
+  /** Whether invocation credential projections can no longer be redeemed */
+  credentialProjectionsRevoked?: boolean;
   /** Whether ephemeral VM state has been destroyed */
   ephemeralStateDestroyed: boolean;
   /** Teardown completion timestamp */
@@ -334,6 +547,7 @@ export type CapabilityInvocationEvidence = {
     admission: "exact-reader/v1" | "exact-writer/v1";
     filesystem: "snapshot-vfs/v1" | "exact-writer-vfs/v1";
     network?: "http-tls-mediator/v1";
+    credentials?: "destination-bound-credentials/v1";
     lifecycle: "one-shot-qemu/v1";
   };
   /** SHA-256 of the snapshotted input bytes */
@@ -399,6 +613,8 @@ export type CapabilityInvocationFeatureManifest = {
   guarantees: Record<string, CapabilityFeatureStatus>;
   domains: Record<string, CapabilityFeatureStatus>;
   operations: Record<string, CapabilityFeatureStatus>;
+  /** Non-wildcard released runtime/conformance combinations */
+  qualifications: Record<string, CapabilityFeatureStatus>;
 };
 
 const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
@@ -413,6 +629,7 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
   },
   profiles: {
     "exact-reader": "active",
+    "exact-reader.http-tls-credentials": "active",
     "exact-writer": "active",
     "scoped-runner": "active",
     writer: "unsupported",
@@ -422,9 +639,11 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
   hosts: { linux: "unverified", darwin: "unverified", win32: "unsupported" },
   guarantees: {
     ...Object.fromEntries(
-      [...EXACT_READER_GUARANTEES, ...HTTP_TLS_EGRESS_GUARANTEES].map(
-        (name) => [name, "active"],
-      ),
+      [
+        ...EXACT_READER_GUARANTEES,
+        ...HTTP_TLS_EGRESS_GUARANTEES,
+        ...DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
+      ].map((name) => [name, "active"]),
     ),
     ...Object.fromEntries(
       EXACT_WRITER_GUARANTEES.map((name) => [name, "active"]),
@@ -438,10 +657,10 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "explicit-shell": "active",
     "full-process-tree-termination": "active",
     "host-observed-process-lifecycle": "active",
-    "per-invocation-cpu": "unsupported",
-    "per-invocation-memory": "unsupported",
-    "per-invocation-pids": "unsupported",
-    "per-invocation-storage": "unsupported",
+    "per-invocation-cpu": "active",
+    "per-invocation-memory": "active",
+    "per-invocation-pids": "active",
+    "per-invocation-storage": "active",
   },
   domains: {
     filesystem: "active",
@@ -450,7 +669,7 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     network: "active",
     environment: "unsupported",
     "environment.scoped-runner": "active",
-    credentials: "unsupported",
+    credentials: "active",
     git: "unsupported",
     ipc: "unsupported",
     devices: "unsupported",
@@ -486,12 +705,37 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "network.http3": "unsupported",
     "network.quic": "unsupported",
     "network.any": "unsupported",
+    "credentials.http-header.destination-bound": "active",
+    "credentials.tls-header.destination-bound": "active",
+    "credentials.query": "unsupported",
+    "credentials.body": "unsupported",
+    "credentials.raw-tcp": "unsupported",
+    "credentials.ssh": "unsupported",
+    "credentials.broker": "unsupported",
     "environment.empty": "active",
     "environment.projected": "active",
     "process.direct-executable": "active",
     "process.descendant-allow-list": "active",
     "process.descendants-denied": "unsupported",
+    "resource.cpu-time": "active",
+    "resource.memory": "active",
+    "resource.pids": "active",
+    "resource.writable-storage": "active",
+    "resource.output": "active",
+    "resource.wall-time": "active",
     "shell.explicit": "active",
+  },
+  qualifications: {
+    "scoped-runner.resources/qemu/linux/released-image-kernel-arch-bundle":
+      "unverified",
+    "scoped-runner.resources/qemu/darwin/released-image-kernel-arch-bundle":
+      "unsupported",
+    "scoped-runner.resources/krun/linux/released-image-kernel-arch-bundle":
+      "unverified",
+    "scoped-runner.resources/krun/darwin/released-image-kernel-arch-bundle":
+      "unverified",
+    "scoped-runner.resources/qemu/win32/released-image-kernel-arch-bundle":
+      "unsupported",
   },
 });
 
@@ -503,7 +747,7 @@ const CEILING_KEYS = [
   "limits",
   "guarantees",
 ] as const;
-const CEILING_OPTIONAL_KEYS = ["network"] as const;
+const CEILING_OPTIONAL_KEYS = ["network", "credentials"] as const;
 const REQUEST_KEYS = [
   "schemaVersion",
   "invocationId",
@@ -548,6 +792,7 @@ export class CapabilityInvocationContext {
   readonly ceiling: Readonly<CapabilityCeiling>;
   readonly ceilingDigest: string;
   private readonly runtime: Readonly<CapabilityInvocationRuntimeOptions>;
+  private readonly credentialStore: CapabilityCredentialStore | null;
   private readonly sourceIdentities: ReadonlyMap<string, HostFileIdentity>;
   private readonly targetIdentities: ReadonlyMap<
     string,
@@ -561,7 +806,15 @@ export class CapabilityInvocationContext {
   ) {
     this.ceiling = deepFreeze(ceiling);
     this.ceilingDigest = sha256(stableJson(ceiling));
-    this.runtime = deepFreeze({ ...runtime });
+    this.credentialStore = runtime.credentialStore ?? null;
+    if (this.credentialStore && ceiling.profile === "exact-reader") {
+      assertCredentialMaterialAbsent(
+        stableJson(ceiling),
+        "capability ceiling",
+        this.credentialStore.sensitiveValues(),
+      );
+    }
+    this.runtime = deepFreeze({ ...runtime, credentialStore: undefined });
     this.sourceIdentities = new Map(
       ceiling.profile === "exact-reader"
         ? ceiling.filesystem.sourcePaths.map((sourcePath) => [
@@ -713,6 +966,11 @@ export class CapabilityInvocationContext {
         request.capabilities.network,
         (this.ceiling as ExactReaderCeiling).network,
       );
+      admitCredentialAuthority(
+        request.capabilities.credentials ?? "none",
+        (this.ceiling as ExactReaderCeiling).credentials,
+        request.capabilities.network,
+      );
     }
     if (
       request.capabilities.network !== "none" &&
@@ -722,6 +980,31 @@ export class CapabilityInvocationContext {
         "invalid_request",
         "a network-enabled invocation cannot require no-network",
       );
+    }
+    if (
+      request.profile === "exact-reader" &&
+      request.capabilities.credentials !== undefined &&
+      request.capabilities.credentials !== "none" &&
+      !this.credentialStore
+    ) {
+      throw new CapabilityAdmissionError(
+        "unsupported",
+        "destination-bound credentials require trusted host configuration",
+      );
+    }
+    if (
+      request.profile === "exact-reader" &&
+      request.capabilities.credentials !== undefined &&
+      request.capabilities.credentials !== "none"
+    ) {
+      for (const guarantee of DESTINATION_BOUND_CREDENTIAL_GUARANTEES) {
+        if (!request.requiredGuarantees.includes(guarantee)) {
+          throw new CapabilityAdmissionError(
+            "invalid_request",
+            `credential projection requires guarantee: ${guarantee}`,
+          );
+        }
+      }
     }
     for (const guarantee of request.requiredGuarantees) {
       if (!ceilingGuarantees.has(guarantee)) {
@@ -767,7 +1050,38 @@ export class CapabilityInvocationContext {
     const observed: CapabilityEffect[] = [];
     const networkEnabled = request.capabilities.network !== "none";
     const abort = new AbortController();
-    const output = new BoundedOutput(request.limits.outputBytes, abort);
+    const credentialAuthority = request.capabilities.credentials ?? "none";
+    const credentialMediator =
+      credentialAuthority === "none"
+        ? null
+        : createInvocationCredentialMediator({
+            executionId,
+            authority: credentialAuthority,
+            store: this.credentialStore!,
+            requested,
+            granted,
+            attempted,
+            denied,
+            observed,
+          });
+    const redact = (value: string): string =>
+      redactCredentialText(
+        value,
+        this.credentialStore?.sensitiveValues() ?? [],
+      );
+    if (credentialMediator) {
+      assertCredentialMaterialAbsent(
+        canonical.canonical,
+        "capability request",
+        this.credentialStore!.sensitiveValues(),
+      );
+      assertCredentialMaterialAbsent(
+        source,
+        "guest filesystem snapshot",
+        this.credentialStore!.sensitiveValues(),
+      );
+    }
+    const output = new BoundedOutput(request.limits.outputBytes, abort, redact);
     const provider = new MemoryProvider();
     const relativeGuestPath = request.capabilities.filesystem.guestPath.slice(
       "/data".length,
@@ -807,6 +1121,7 @@ export class CapabilityInvocationContext {
             attempted,
             denied,
             observed,
+            credentialMediator,
           })
         : undefined;
 
@@ -857,6 +1172,7 @@ export class CapabilityInvocationContext {
         [request.launch.executable, ...request.launch.args],
         {
           clearEnv: true,
+          env: credentialMediator?.environment,
           signal: abort.signal,
           stdin: false,
           pty: false,
@@ -876,7 +1192,7 @@ export class CapabilityInvocationContext {
       } else if (output.overflowed) outcome = "output_overflow";
       else if (timedOut) outcome = "timeout";
       else outcome = "transport_failure";
-      error = safeError(caught);
+      error = safeError(caught, redact);
     } finally {
       if (timer) clearTimeout(timer);
       if (vm) {
@@ -888,6 +1204,7 @@ export class CapabilityInvocationContext {
             caught instanceof Error ? caught : new Error(String(caught));
         }
       }
+      credentialMediator?.deactivate();
     }
 
     const runnerStopped =
@@ -900,7 +1217,7 @@ export class CapabilityInvocationContext {
     if (!teardownComplete) {
       outcome = "teardown_failure";
       error = closeError
-        ? safeError(closeError)
+        ? safeError(closeError, redact)
         : "VM teardown could not be confirmed";
     }
 
@@ -911,6 +1228,9 @@ export class CapabilityInvocationContext {
       vfsHandlesRevoked: teardownComplete,
       policyRemoved: teardownComplete,
       ...(networkEnabled ? { networkChannelsClosed: teardownComplete } : {}),
+      ...(credentialMediator
+        ? { credentialProjectionsRevoked: !credentialMediator.active }
+        : {}),
       ephemeralStateDestroyed: teardownComplete,
       completedAt: teardownComplete ? settledAt : null,
     };
@@ -933,6 +1253,9 @@ export class CapabilityInvocationContext {
           filesystem: "snapshot-vfs/v1",
           ...(networkEnabled
             ? { network: "http-tls-mediator/v1" as const }
+            : {}),
+          ...(credentialMediator
+            ? { credentials: "destination-bound-credentials/v1" as const }
             : {}),
           lifecycle: "one-shot-qemu/v1",
         },
@@ -1191,10 +1514,16 @@ class BoundedOutput {
   private acceptedBytes = 0;
   private readonly limit: number;
   private readonly abort: AbortController;
+  private readonly redact: (value: string) => string;
 
-  constructor(limit: number, abort: AbortController) {
+  constructor(
+    limit: number,
+    abort: AbortController,
+    redact: (value: string) => string = (value) => value,
+  ) {
     this.limit = limit;
     this.abort = abort;
+    this.redact = redact;
     this.stdout = new CollectingSink(this);
     this.stderr = new CollectingSink(this);
   }
@@ -1210,11 +1539,11 @@ class BoundedOutput {
   }
 
   get stdoutText(): string {
-    return Buffer.concat(this.stdout.chunks).toString("utf8");
+    return this.redact(Buffer.concat(this.stdout.chunks).toString("utf8"));
   }
 
   get stderrText(): string {
-    return Buffer.concat(this.stderr.chunks).toString("utf8");
+    return this.redact(Buffer.concat(this.stderr.chunks).toString("utf8"));
   }
 }
 
@@ -1601,6 +1930,174 @@ function normalizeNetworkAuthority(
   return { rules };
 }
 
+function normalizeCredentialAuthority(
+  input: unknown,
+  label: string,
+): CapabilityCredentialAuthority {
+  if (input === "none") return "none";
+  const root = object(input, label);
+  exactKeys(root, ["projections"], label);
+  if (!Array.isArray(root.projections)) {
+    invalid(`${label}.projections must be an array`);
+  }
+  if (root.projections.length === 0) {
+    invalid(`${label}.projections cannot be empty`);
+  }
+  const projections = root.projections.map((inputProjection, index) => {
+    const projectionLabel = `${label}.projections[${index}]`;
+    const projection = object(inputProjection, projectionLabel);
+    exactKeys(
+      projection,
+      [
+        "reference",
+        "projection",
+        "redactionId",
+        "protocol",
+        "destination",
+        "port",
+        "methods",
+        "validity",
+      ],
+      projectionLabel,
+    );
+    if (projection.protocol !== "http" && projection.protocol !== "tls") {
+      unsupported(`${projectionLabel}.protocol supports only http or tls`);
+    }
+    const validity = normalizeCredentialValidity(
+      projection.validity,
+      `${projectionLabel}.validity`,
+    );
+    const methods = normalizeCredentialMethods(
+      projection.methods,
+      `${projectionLabel}.methods`,
+    );
+    return {
+      reference: credentialIdentifier(
+        projection.reference,
+        `${projectionLabel}.reference`,
+      ),
+      projection: credentialProjectionName(
+        projection.projection,
+        `${projectionLabel}.projection`,
+      ),
+      redactionId: credentialIdentifier(
+        projection.redactionId,
+        `${projectionLabel}.redactionId`,
+      ),
+      protocol: projection.protocol,
+      destination: normalizeNetworkDestination(
+        projection.destination,
+        `${projectionLabel}.destination`,
+      ),
+      port: networkPort(projection.port, `${projectionLabel}.port`),
+      methods,
+      validity,
+    } satisfies CapabilityCredentialProjection;
+  });
+  const references = new Set<string>();
+  const names = new Set<string>();
+  for (const projection of projections) {
+    if (
+      references.has(projection.reference) ||
+      names.has(projection.projection)
+    ) {
+      invalid(
+        `${label}.projections contains ambiguous duplicate references or projection names`,
+      );
+    }
+    references.add(projection.reference);
+    names.add(projection.projection);
+  }
+  projections.sort((left, right) =>
+    stableJson(left).localeCompare(stableJson(right)),
+  );
+  return { projections };
+}
+
+function normalizeCredentialValidity(
+  input: unknown,
+  label: string,
+): CapabilityCredentialValidity {
+  const validity = object(input, label);
+  exactKeys(validity, [], label, ["notBefore", "expiresAt"]);
+  const notBefore = Object.hasOwn(validity, "notBefore")
+    ? isoTimestamp(validity.notBefore, `${label}.notBefore`)
+    : undefined;
+  const expiresAt = Object.hasOwn(validity, "expiresAt")
+    ? isoTimestamp(validity.expiresAt, `${label}.expiresAt`)
+    : undefined;
+  if (
+    notBefore !== undefined &&
+    expiresAt !== undefined &&
+    Date.parse(notBefore) >= Date.parse(expiresAt)
+  ) {
+    invalid(`${label} must have notBefore earlier than expiresAt`);
+  }
+  return {
+    ...(notBefore ? { notBefore } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
+function normalizeCredentialMethods(
+  input: unknown,
+  label: string,
+): CapabilityHttpMethod[] {
+  const methods = uniqueSorted(
+    stringArray(input, label).map((method) => {
+      if (!(CAPABILITY_HTTP_METHODS as readonly string[]).includes(method)) {
+        unsupported(`${label} contains unsupported method: ${method}`);
+      }
+      return method as CapabilityHttpMethod;
+    }),
+  );
+  if (methods.length === 0) invalid(`${label} cannot be empty`);
+  return methods;
+}
+
+function normalizeTrustedCredential(
+  input: unknown,
+  label: string,
+): TrustedCapabilityCredential {
+  const credential = object(input, label);
+  exactKeys(
+    credential,
+    ["value", "redactionId", "protocol", "destination", "port", "methods"],
+    label,
+    ["notBefore", "expiresAt"],
+  );
+  const value = nonEmptyString(credential.value, `${label}.value`);
+  if (credential.protocol !== "http" && credential.protocol !== "tls") {
+    throw new Error(`${label}.protocol supports only http or tls`);
+  }
+  const validity = normalizeCredentialValidity(
+    {
+      ...(Object.hasOwn(credential, "notBefore")
+        ? { notBefore: credential.notBefore }
+        : {}),
+      ...(Object.hasOwn(credential, "expiresAt")
+        ? { expiresAt: credential.expiresAt }
+        : {}),
+    },
+    `${label}.validity`,
+  );
+  return {
+    value,
+    redactionId: credentialIdentifier(
+      credential.redactionId,
+      `${label}.redactionId`,
+    ),
+    protocol: credential.protocol,
+    destination: normalizeNetworkDestination(
+      credential.destination,
+      `${label}.destination`,
+    ),
+    port: networkPort(credential.port, `${label}.port`),
+    methods: normalizeCredentialMethods(credential.methods, `${label}.methods`),
+    ...validity,
+  };
+}
+
 function normalizeNetworkDestination(value: unknown, label: string): string {
   const input = nonEmptyString(value, label);
   if (input !== input.trim() || input.includes("%")) {
@@ -1677,6 +2174,87 @@ function admitNetworkAuthority(
   }
 }
 
+function admitCredentialAuthority(
+  request: CapabilityCredentialAuthority,
+  ceiling: CapabilityCredentialAuthority | undefined,
+  network: CapabilityNetworkAuthority,
+): void {
+  if (request === "none") return;
+  if (!ceiling || ceiling === "none") {
+    throw new CapabilityAdmissionError(
+      "ceiling_widening",
+      "credential authority is outside the immutable ceiling",
+    );
+  }
+  if (network === "none") {
+    throw new CapabilityAdmissionError(
+      "invalid_request",
+      "credential projection requires an active HTTP/TLS network grant",
+    );
+  }
+  for (const requested of request.projections) {
+    const permitted = ceiling.projections.find(
+      (candidate) =>
+        candidate.reference === requested.reference &&
+        candidate.projection === requested.projection &&
+        candidate.redactionId === requested.redactionId &&
+        credentialOrigin(candidate) === credentialOrigin(requested),
+    );
+    if (
+      !permitted ||
+      requested.methods.some((method) => !permitted.methods.includes(method)) ||
+      !validityContracts(requested.validity, permitted.validity)
+    ) {
+      throw new CapabilityAdmissionError(
+        "ceiling_widening",
+        `credential authority is outside the immutable ceiling: ${requested.redactionId}`,
+      );
+    }
+    const networkRule = network.rules.find(
+      (rule) => networkOrigin(rule) === credentialOrigin(requested),
+    );
+    if (
+      !networkRule ||
+      requested.methods.some((method) => !networkRule.methods.includes(method))
+    ) {
+      throw new CapabilityAdmissionError(
+        "invalid_request",
+        `credential authority is outside the active network grant: ${requested.redactionId}`,
+      );
+    }
+  }
+}
+
+function credentialOrigin(
+  credential: Pick<
+    CapabilityCredentialProjection,
+    "protocol" | "destination" | "port"
+  >,
+): string {
+  return `${credential.protocol}://${credential.destination}:${credential.port}`;
+}
+
+function validityContracts(
+  requested: CapabilityCredentialValidity,
+  ceiling: CapabilityCredentialValidity,
+): boolean {
+  if (
+    ceiling.notBefore &&
+    (!requested.notBefore ||
+      Date.parse(requested.notBefore) < Date.parse(ceiling.notBefore))
+  ) {
+    return false;
+  }
+  if (
+    ceiling.expiresAt &&
+    (!requested.expiresAt ||
+      Date.parse(requested.expiresAt) > Date.parse(ceiling.expiresAt))
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function redirectRank(value: CapabilityNetworkRule["redirects"]): number {
   if (value === "deny") return 0;
   if (value === "same-origin") return 1;
@@ -1687,6 +2265,332 @@ function networkOrigin(rule: CapabilityNetworkRule): string {
   return `${rule.protocol}://${rule.destination}:${rule.port}`;
 }
 
+type CredentialDenialReason = NonNullable<CapabilityCredentialEffect["reason"]>;
+
+class InvocationCredentialMediator {
+  readonly environment: Readonly<Record<string, string>>;
+  active = true;
+  private readonly authority: Exclude<CapabilityCredentialAuthority, "none">;
+  private readonly store: CapabilityCredentialStore;
+  private readonly placeholders = new Map<
+    string,
+    CapabilityCredentialProjection
+  >();
+  private readonly attempted: CapabilityEffect[];
+  private readonly denied: CapabilityEffect[];
+  private readonly observed: CapabilityEffect[];
+
+  constructor(options: {
+    executionId: string;
+    authority: Exclude<CapabilityCredentialAuthority, "none">;
+    store: CapabilityCredentialStore;
+    attempted: CapabilityEffect[];
+    denied: CapabilityEffect[];
+    observed: CapabilityEffect[];
+  }) {
+    this.authority = options.authority;
+    this.store = options.store;
+    this.attempted = options.attempted;
+    this.denied = options.denied;
+    this.observed = options.observed;
+    const environment: Record<string, string> = {};
+    const executionTag = createHash("sha256")
+      .update(options.executionId)
+      .digest("hex")
+      .slice(0, 16);
+    for (const projection of options.authority.projections) {
+      const placeholder = `GONDOLIN_CREDENTIAL_${executionTag}_${randomBytes(24).toString("hex")}`;
+      environment[projection.projection] = placeholder;
+      this.placeholders.set(placeholder, projection);
+    }
+    this.environment = Object.freeze(environment);
+  }
+
+  apply(request: Request): Request {
+    const parsed = parseMediatedUrl(request.url);
+    const method = request.method.toUpperCase();
+    if (!this.active || !parsed) {
+      if (this.requestContainsCredentialMaterial(request)) {
+        const projection = this.authority.projections[0]!;
+        this.reject(
+          projection,
+          parsed,
+          method,
+          this.active ? "mismatch" : "inactive",
+        );
+      }
+      return request;
+    }
+
+    this.rejectCredentialMaterialInUrl(request.url, parsed, method);
+    const headers = new Headers(request.headers);
+    for (const [headerName, original] of request.headers.entries()) {
+      let value = original;
+      const basic = /^(authorization|proxy-authorization)$/i.test(headerName)
+        ? decodeBasicCredential(value)
+        : null;
+      if (basic) {
+        const replaced = this.replaceValue(basic.decoded, parsed, method);
+        if (replaced !== basic.decoded) {
+          value = `${basic.scheme}${basic.space}${Buffer.from(replaced, "utf8").toString("base64")}${basic.trailing}`;
+        }
+      }
+      value = this.replaceValue(value, parsed, method);
+      headers.set(headerName, value);
+    }
+    for (const name of [...request.headers.keys()])
+      request.headers.delete(name);
+    for (const [name, value] of headers.entries())
+      request.headers.set(name, value);
+    return request;
+  }
+
+  deactivate(): void {
+    this.active = false;
+    this.placeholders.clear();
+  }
+
+  async redactResponse(response: Response): Promise<Response> {
+    const headers = new Headers(response.headers);
+    for (const [name, value] of headers.entries()) {
+      headers.set(
+        name,
+        redactCredentialText(value, this.store.sensitiveValues()),
+      );
+    }
+    const body = response.body
+      ? redactCredentialBuffer(
+          Buffer.from(await response.arrayBuffer()),
+          this.store.sensitiveValues(),
+        )
+      : null;
+    headers.delete("content-length");
+    return new Response(body ? new Uint8Array(body) : null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
+  private replaceValue(
+    value: string,
+    destination: CapabilityNetworkRule,
+    method: string,
+  ): string {
+    let updated = value;
+    let redeemed = false;
+    for (const [placeholder, projection] of this.placeholders) {
+      if (!updated.includes(placeholder)) continue;
+      const entry = this.resolve(projection, destination, method);
+      updated = updated.split(placeholder).join(entry.value);
+      redeemed = true;
+      this.observed.push(
+        credentialEffect(projection, "use", "observed", destination, method),
+      );
+    }
+
+    if (/GONDOLIN_CREDENTIAL_[A-Za-z0-9_-]+/.test(updated)) {
+      const projection = this.authority.projections[0]!;
+      this.reject(projection, destination, method, "stale");
+    }
+
+    for (const sensitive of this.store.sensitiveValues()) {
+      if (!sensitive || !updated.includes(sensitive)) continue;
+      const activeProjection = this.authority.projections.find((projection) => {
+        const entry = this.store.resolve(projection.reference);
+        return entry?.value === sensitive;
+      });
+      if (!activeProjection) {
+        this.reject(
+          this.authority.projections[0]!,
+          destination,
+          method,
+          "revoked",
+        );
+      }
+      this.assertScope(activeProjection, destination, method);
+      if (!redeemed) {
+        this.observed.push(
+          credentialEffect(
+            activeProjection,
+            "use",
+            "observed",
+            destination,
+            method,
+          ),
+        );
+      }
+    }
+    return updated;
+  }
+
+  private resolve(
+    projection: CapabilityCredentialProjection,
+    destination: CapabilityNetworkRule,
+    method: string,
+  ): StoredCapabilityCredential {
+    this.attempted.push(
+      credentialEffect(projection, "use", "attempted", destination, method),
+    );
+    if (!this.active) this.reject(projection, destination, method, "inactive");
+    this.assertScope(projection, destination, method);
+    const entry = this.store.resolve(projection.reference);
+    if (!entry || entry.deleted) {
+      this.reject(projection, destination, method, "missing");
+    }
+    if (entry.revoked) {
+      this.reject(projection, destination, method, "revoked");
+    }
+    const now = Date.now();
+    if (
+      !credentialStoreMatchesProjection(entry, projection) ||
+      !isCredentialTimeValid(projection.validity, now)
+    ) {
+      const reason = !credentialStoreMatchesProjection(entry, projection)
+        ? "mismatch"
+        : "expired";
+      this.reject(projection, destination, method, reason);
+    }
+    if (!isCredentialTimeValid(entry, now)) {
+      this.reject(projection, destination, method, "expired");
+    }
+    return entry;
+  }
+
+  private assertScope(
+    projection: CapabilityCredentialProjection,
+    destination: CapabilityNetworkRule,
+    method: string,
+  ): void {
+    if (
+      projection.protocol !== destination.protocol ||
+      projection.destination !== destination.destination ||
+      projection.port !== destination.port ||
+      !projection.methods.includes(method as CapabilityHttpMethod)
+    ) {
+      this.reject(projection, destination, method, "mismatch");
+    }
+  }
+
+  private rejectCredentialMaterialInUrl(
+    url: string,
+    destination: CapabilityNetworkRule,
+    method: string,
+  ): void {
+    if (
+      /GONDOLIN_CREDENTIAL_[A-Za-z0-9_-]+/.test(url) ||
+      this.store.sensitiveValues().some((value) => value && url.includes(value))
+    ) {
+      this.reject(
+        this.authority.projections[0]!,
+        destination,
+        method,
+        "mismatch",
+      );
+    }
+  }
+
+  private requestContainsCredentialMaterial(request: Request): boolean {
+    const values = [request.url, ...request.headers.values()];
+    return values.some(
+      (value) =>
+        /GONDOLIN_CREDENTIAL_[A-Za-z0-9_-]+/.test(value) ||
+        this.store
+          .sensitiveValues()
+          .some((sensitive) => sensitive && value.includes(sensitive)),
+    );
+  }
+
+  private reject(
+    projection: CapabilityCredentialProjection,
+    destination: CapabilityNetworkRule | null,
+    method: string,
+    reason: CredentialDenialReason,
+  ): never {
+    const operation =
+      reason === "expired"
+        ? "expiry"
+        : reason === "revoked" || reason === "missing"
+          ? "revocation"
+          : "denial";
+    const effect = credentialEffect(
+      projection,
+      operation,
+      "denied",
+      destination ?? projection,
+      method,
+      reason,
+    );
+    this.denied.push(effect);
+    throw new HttpRequestBlockedError(
+      `credential ${projection.redactionId} denied: ${reason}`,
+    );
+  }
+}
+
+function createInvocationCredentialMediator(options: {
+  executionId: string;
+  authority: Exclude<CapabilityCredentialAuthority, "none">;
+  store: CapabilityCredentialStore;
+  requested: CapabilityEffect[];
+  granted: CapabilityEffect[];
+  attempted: CapabilityEffect[];
+  denied: CapabilityEffect[];
+  observed: CapabilityEffect[];
+}): InvocationCredentialMediator {
+  for (const projection of options.authority.projections) {
+    options.requested.push(
+      credentialEffect(projection, "projection", "requested", projection),
+    );
+    options.granted.push(
+      credentialEffect(projection, "projection", "granted", projection),
+    );
+    options.observed.push(
+      credentialEffect(projection, "projection", "observed", projection),
+    );
+  }
+  return new InvocationCredentialMediator(options);
+}
+
+function credentialEffect(
+  projection: CapabilityCredentialProjection,
+  operation: CapabilityCredentialEffect["operation"],
+  decision: CapabilityEffectDecision,
+  destination: Pick<CapabilityNetworkRule, "protocol" | "destination" | "port">,
+  method?: string,
+  reason?: CredentialDenialReason,
+): CapabilityCredentialEffect {
+  return {
+    domain: "credential",
+    operation,
+    referenceId: sha256(`credential-reference:${projection.reference}`),
+    projection: projection.projection,
+    redactionId: projection.redactionId,
+    protocol: destination.protocol,
+    destination: destination.destination,
+    port: destination.port,
+    ...(method ? { method } : {}),
+    ...(reason ? { reason } : {}),
+    decision,
+  };
+}
+
+function decodeBasicCredential(value: string): {
+  scheme: string;
+  space: string;
+  decoded: string;
+  trailing: string;
+} | null {
+  const match = value.match(/^(Basic)(\s+)(\S+)(\s*)$/i);
+  if (!match) return null;
+  return {
+    scheme: match[1]!,
+    space: match[2]!,
+    decoded: Buffer.from(match[3]!, "base64").toString("utf8"),
+    trailing: match[4] ?? "",
+  };
+}
+
 function createInvocationHttpHooks(options: {
   authority: Exclude<CapabilityNetworkAuthority, "none">;
   requested: CapabilityEffect[];
@@ -1694,6 +2598,7 @@ function createInvocationHttpHooks(options: {
   attempted: CapabilityEffect[];
   denied: CapabilityEffect[];
   observed: CapabilityEffect[];
+  credentialMediator: InvocationCredentialMediator | null;
 }): HttpHooks {
   for (const rule of options.authority.rules) {
     for (const method of rule.methods) {
@@ -1718,6 +2623,12 @@ function createInvocationHttpHooks(options: {
         (method === undefined ||
           rule.methods.includes(method as CapabilityHttpMethod)),
     );
+
+  const onRequest: NonNullable<HttpHooks["onRequest"]> | undefined =
+    options.credentialMediator
+      ? (request) => options.credentialMediator!.apply(request)
+      : undefined;
+  if (onRequest) onRequest[ON_REQUEST_EARLY_POLICY_SAFE] = true;
 
   return {
     isRequestAllowed(request) {
@@ -1796,7 +2707,7 @@ function createInvocationHttpHooks(options: {
       (allowed ? options.observed : options.denied).push(effect);
       return allowed;
     },
-    onResponse(response, request) {
+    async onResponse(response, request) {
       const parsed = parseMediatedUrl(request.url);
       if (parsed) {
         options.observed.push(
@@ -1808,8 +2719,11 @@ function createInvocationHttpHooks(options: {
           ),
         );
       }
-      return response;
+      return options.credentialMediator
+        ? await options.credentialMediator.redactResponse(response)
+        : response;
     },
+    ...(onRequest ? { onRequest } : {}),
     onFlowDecision(info) {
       const protocol =
         info.protocol === "http" ||
@@ -2027,6 +2941,10 @@ function normalizeCeiling(input: unknown): CapabilityCeiling {
     profile === "exact-reader"
       ? normalizeNetworkAuthority(root.network ?? "none", "ceiling.network")
       : undefined;
+  const credentials =
+    profile === "exact-reader" && Object.hasOwn(root, "credentials")
+      ? normalizeCredentialAuthority(root.credentials, "ceiling.credentials")
+      : undefined;
   if (
     !hostPaths.length ||
     !guestPaths.length ||
@@ -2059,6 +2977,7 @@ function normalizeCeiling(input: unknown): CapabilityCeiling {
         guestPaths: uniqueSorted(guestPaths),
       },
       network,
+      ...(credentials !== undefined ? { credentials } : {}),
       guarantees: uniqueSorted(guarantees as ExactReaderGuarantee[]),
     };
   }
@@ -2104,6 +3023,7 @@ function normalizeRequest(input: unknown): CapabilityInvocationRequest {
     capabilities,
     ["filesystem", "network", "environment"],
     "request.capabilities",
+    profile === "exact-reader" ? ["credentials"] : [],
   );
   const network = normalizeNetworkAuthority(
     capabilities.network,
@@ -2114,6 +3034,13 @@ function normalizeRequest(input: unknown): CapabilityInvocationRequest {
     "request.capabilities.environment",
   );
   exactKeys(environment, [], "request.capabilities.environment");
+  const credentials =
+    profile === "exact-reader" && Object.hasOwn(capabilities, "credentials")
+      ? normalizeCredentialAuthority(
+          capabilities.credentials,
+          "request.capabilities.credentials",
+        )
+      : undefined;
 
   const filesystem = object(
     capabilities.filesystem,
@@ -2192,6 +3119,7 @@ function normalizeRequest(input: unknown): CapabilityInvocationRequest {
         },
         network,
         environment: {},
+        ...(credentials !== undefined ? { credentials } : {}),
       },
       requiredGuarantees: requiredGuarantees as ExactReaderGuarantee[],
     };
@@ -2577,7 +3505,11 @@ function guaranteeArray(
   const values = stringArray(value, label);
   const supported =
     profile === "exact-reader"
-      ? [...EXACT_READER_GUARANTEES, ...HTTP_TLS_EGRESS_GUARANTEES]
+      ? [
+          ...EXACT_READER_GUARANTEES,
+          ...HTTP_TLS_EGRESS_GUARANTEES,
+          ...DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
+        ]
       : EXACT_WRITER_GUARANTEES;
   for (const item of values) {
     if (!(supported as readonly string[]).includes(item)) {
@@ -2659,6 +3591,131 @@ function nonEmptyString(value: unknown, label: string): string {
     invalid(`${label} must be a non-empty string without NUL bytes`);
   }
   return value;
+}
+
+function credentialIdentifier(value: unknown, label: string): string {
+  const identifier = nonEmptyString(value, label);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/.test(identifier)) {
+    invalid(`${label} contains unsupported characters`);
+  }
+  return identifier;
+}
+
+function credentialProjectionName(value: unknown, label: string): string {
+  const name = nonEmptyString(value, label);
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)) {
+    invalid(`${label} must be a valid environment variable name`);
+  }
+  return name;
+}
+
+function isoTimestamp(value: unknown, label: string): string {
+  const timestamp = nonEmptyString(value, label);
+  const milliseconds = Date.parse(timestamp);
+  if (!Number.isFinite(milliseconds)) invalid(`${label} must be ISO 8601`);
+  return new Date(milliseconds).toISOString();
+}
+
+function credentialStoreMatchesProjection(
+  entry: StoredCapabilityCredential,
+  projection: CapabilityCredentialProjection,
+): boolean {
+  return (
+    entry.redactionId === projection.redactionId &&
+    entry.protocol === projection.protocol &&
+    entry.destination === projection.destination &&
+    entry.port === projection.port &&
+    projection.methods.every((method) => entry.methods.includes(method))
+  );
+}
+
+function isCredentialTimeValid(
+  validity: CapabilityCredentialValidity,
+  now: number,
+): boolean {
+  return (
+    (!validity.notBefore || now >= Date.parse(validity.notBefore)) &&
+    (!validity.expiresAt || now < Date.parse(validity.expiresAt))
+  );
+}
+
+function credentialRedactionVariants(value: string): string[] {
+  const buffer = Buffer.from(value, "utf8");
+  return uniqueSorted(
+    [
+      value,
+      encodeURIComponent(value),
+      buffer.toString("base64"),
+      buffer.toString("base64url"),
+    ].filter(Boolean),
+  );
+}
+
+function redactCredentialText(
+  value: string,
+  sensitiveValues: string[],
+): string {
+  let redacted = value;
+  const variants = sensitiveValues
+    .flatMap(credentialRedactionVariants)
+    .sort((left, right) => right.length - left.length);
+  for (const sensitive of variants) {
+    redacted = redacted.split(sensitive).join("[REDACTED_CREDENTIAL]");
+  }
+  return redacted;
+}
+
+function redactCredentialBuffer(
+  value: Buffer,
+  sensitiveValues: string[],
+): Buffer {
+  const replacement = Buffer.from("[REDACTED_CREDENTIAL]", "utf8");
+  const variants = uniqueSorted(
+    sensitiveValues.flatMap(credentialRedactionVariants),
+  )
+    .map((variant) => Buffer.from(variant, "utf8"))
+    .sort((left, right) => right.length - left.length);
+  let redacted: Buffer = Buffer.from(value);
+  for (const sensitive of variants) {
+    redacted = replaceBuffer(redacted, sensitive, replacement);
+  }
+  return redacted;
+}
+
+function replaceBuffer(
+  value: Buffer,
+  search: Buffer,
+  replacement: Buffer,
+): Buffer {
+  if (search.length === 0) return value;
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  while (offset < value.length) {
+    const found = value.indexOf(search, offset);
+    if (found < 0) break;
+    chunks.push(value.subarray(offset, found), replacement);
+    offset = found + search.length;
+  }
+  if (chunks.length === 0) return value;
+  chunks.push(value.subarray(offset));
+  return Buffer.concat(chunks);
+}
+
+function assertCredentialMaterialAbsent(
+  value: string | Buffer,
+  label: string,
+  sensitiveValues: string[],
+): void {
+  const text = Buffer.isBuffer(value) ? value.toString("utf8") : value;
+  if (
+    sensitiveValues.some((sensitive) =>
+      credentialRedactionVariants(sensitive).some((variant) =>
+        text.includes(variant),
+      ),
+    )
+  ) {
+    invalid(`${label} contains trusted credential material`);
+  }
 }
 
 function positiveInteger(value: unknown, label: string): number {
@@ -2773,7 +3830,13 @@ function unavailableRuntimeIdentity(): VmRuntimeIdentity {
   };
 }
 
-function safeError(error: unknown): string {
+function safeError(
+  error: unknown,
+  redact: (value: string) => string = (value) => value,
+): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, 512);
+  return redact(message).slice(0, 512);
 }
+
+/** @internal */
+export const __test = { redactCredentialBuffer };

@@ -302,8 +302,7 @@ export class VM {
   private vmmChecked = false;
   private debugLog: DebugLogFn | null = null;
   private debugListener:
-    | ((component: DebugComponent, message: string) => void)
-    | null = null;
+    ((component: DebugComponent, message: string) => void) | null = null;
   private sshAccess: SshAccess | null = null;
   private gondolinEtc: ReturnType<typeof createGondolinEtcMount> | null = null;
   private ingressAccess: IngressAccess | null = null;
@@ -1173,6 +1172,14 @@ fi
         env: mergedEnv && mergedEnv.length ? mergedEnv : undefined,
         clear_env: options.clearEnv ? true : undefined,
         allowed_executables: options.allowedExecutables,
+        allowed_writable_paths: options.allowedWritablePaths,
+        resource_limits: options.resourceLimits
+          ? {
+              cpu_time_ms: options.resourceLimits.cpuTimeMs,
+              memory_bytes: options.resourceLimits.memoryBytes,
+              pids: options.resourceLimits.pids,
+            }
+          : undefined,
         cwd: options.cwd,
         stdin: session.stdinEnabled ? true : undefined,
         pty: options.pty ? true : undefined,
@@ -1885,7 +1892,12 @@ fi
     const session = this.sessions.get(message.id);
     if (!session) return;
     this.sessions.delete(message.id);
-    finishExecSession(session, message.exit_code ?? 1, message.signal);
+    finishExecSession(
+      session,
+      message.exit_code ?? 1,
+      message.signal,
+      message.resource_usage,
+    );
   }
 
   private handleError(message: ErrorMessage) {

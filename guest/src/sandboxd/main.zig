@@ -57,6 +57,8 @@ const OwnedExecRequest = struct {
     env: []const []const u8,
     clear_env: bool,
     allowed_executables: []const []const u8,
+    allowed_writable_paths: []const []const u8,
+    resource_limits: ?protocol.ExecResourceLimits,
     cwd: ?[]u8,
     stdin: bool,
     pty: bool,
@@ -71,6 +73,8 @@ const OwnedExecRequest = struct {
         allocator.free(self.env);
         for (self.allowed_executables) |entry| allocator.free(entry);
         allocator.free(self.allowed_executables);
+        for (self.allowed_writable_paths) |entry| allocator.free(entry);
+        allocator.free(self.allowed_writable_paths);
         if (self.cwd) |cwd| allocator.free(cwd);
     }
 };
@@ -194,6 +198,17 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         allowed_len += 1;
     }
 
+    var allowed_writable_paths = try allocator.alloc([]const u8, req.allowed_writable_paths.len);
+    var writable_len: usize = 0;
+    errdefer {
+        for (allowed_writable_paths[0..writable_len]) |entry| allocator.free(entry);
+        allocator.free(allowed_writable_paths);
+    }
+    for (req.allowed_writable_paths) |entry| {
+        allowed_writable_paths[writable_len] = try allocator.dupe(u8, entry);
+        writable_len += 1;
+    }
+
     const cwd = if (req.cwd) |value| try allocator.dupe(u8, value) else null;
     errdefer if (cwd) |value| allocator.free(value);
 
@@ -207,6 +222,8 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         .env = env,
         .clear_env = req.clear_env,
         .allowed_executables = allowed_executables,
+        .allowed_writable_paths = allowed_writable_paths,
+        .resource_limits = req.resource_limits,
         .cwd = cwd,
         .stdin = req.stdin,
         .pty = req.pty,
@@ -306,6 +323,7 @@ pub fn main() !void {
                 allocator.free(req.argv);
                 allocator.free(req.env);
                 allocator.free(req.allowed_executables);
+                allocator.free(req.allowed_writable_paths);
             }
 
             startExecSession(&exec_sessions, &tx, req) catch |err| {
@@ -668,7 +686,18 @@ fn waitForVirtioData(virtio_fd: posix.fd_t) void {
 fn execWorker(session: *ExecSession) void {
     runExecSession(session) catch |err| {
         log.err("exec handling failed id={}: {s}", .{ session.req.id, @errorName(err) });
-        _ = session.tx.sendError(session.allocator, session.req.id, "exec_failed", "failed to execute") catch {};
+        const code: []const u8 = switch (err) {
+            error.ResourceControllerUnavailable,
+            error.ResourceStartGateMissing,
+            error.ResourceStartGateClosed,
+            => "resource_controller_unavailable",
+            else => "exec_failed",
+        };
+        const message: []const u8 = if (std.mem.eql(u8, code, "resource_controller_unavailable"))
+            "required resource controllers could not be installed before launch"
+        else
+            "failed to execute";
+        _ = session.tx.sendError(session.allocator, session.req.id, code, message) catch {};
     };
 
     markSessionDone(session);
@@ -692,6 +721,24 @@ fn runExecSession(session: *ExecSession) !void {
     const use_pty = req.pty;
     const wants_stdin = req.stdin or use_pty;
 
+    var resource_group = if (req.resource_limits) |limits|
+        try ResourceGroup.create(arena_alloc, req.id, limits)
+    else
+        null;
+    var resource_usage: ?protocol.ExecResourceUsage = null;
+    defer if (resource_group) |*group| {
+        if (resource_usage == null) resource_usage = group.settle();
+    };
+
+    var start_gate: ?[2]posix.fd_t = if (resource_group != null)
+        try posix.pipe2(.{ .CLOEXEC = true })
+    else
+        null;
+    errdefer if (start_gate) |gate| {
+        posix.close(gate[0]);
+        posix.close(gate[1]);
+    };
+
     var stdout_fd: ?posix.fd_t = null;
     var stderr_fd: ?posix.fd_t = null;
     var stdin_fd: ?posix.fd_t = null;
@@ -711,7 +758,8 @@ fn runExecSession(session: *ExecSession) !void {
         }
         pid = @intCast(forked);
         if (pid == 0) {
-            applyExecutablePolicy(req.allowed_executables) catch {
+            awaitResourceStartGate(start_gate) catch posix.exit(126);
+            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
                 const msg = "executable policy failed\n";
                 _ = posix.write(posix.STDERR_FILENO, msg) catch {};
                 posix.exit(126);
@@ -726,6 +774,8 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.exit(127);
             };
         }
+
+        try releaseResourceStartGate(&resource_group, &start_gate, pid);
 
         pty_master = @intCast(master);
         stdout_fd = pty_master;
@@ -760,6 +810,7 @@ fn runExecSession(session: *ExecSession) !void {
 
         pid = try posix.fork();
         if (pid == 0) {
+            awaitResourceStartGate(start_gate) catch posix.exit(126);
             if (wants_stdin) {
                 try posix.dup2(stdin_pipe.?[0], posix.STDIN_FILENO);
             } else {
@@ -781,7 +832,7 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.close(stdin_pipe.?[1]);
             }
 
-            applyExecutablePolicy(req.allowed_executables) catch {
+            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
                 const msg = "executable policy failed\n";
                 _ = posix.write(posix.STDERR_FILENO, msg) catch {};
                 posix.exit(126);
@@ -797,6 +848,7 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.exit(127);
             };
         }
+        try releaseResourceStartGate(&resource_group, &start_gate, pid);
     }
 
     errdefer {
@@ -818,6 +870,7 @@ fn runExecSession(session: *ExecSession) !void {
     const close_stdin_on_eof = !use_pty;
 
     var status: ?u32 = null;
+    var tree_killed = false;
 
     if (wants_stdin) {
         const grant_bytes: usize = @min(max_queued_stdin_bytes, @as(usize, std.math.maxInt(u32)));
@@ -861,6 +914,12 @@ fn runExecSession(session: *ExecSession) !void {
     }
 
     while (true) {
+        if (resource_group) |*group| {
+            if (!tree_killed and group.pollExhaustion()) {
+                group.killAll();
+                tree_killed = true;
+            }
+        }
         session.mutex.lockUncancelable(syncIo());
         std.mem.swap(std.ArrayList(ExecControlMessage), &local_controls, &session.controls);
         session.mutex.unlock(syncIo());
@@ -1139,6 +1198,10 @@ fn runExecSession(session: *ExecSession) !void {
             const res = posix.waitpid(pid, posix.W.NOHANG);
             if (res.pid != 0) {
                 status = res.status;
+                if (resource_group) |*group| {
+                    group.killAll();
+                    tree_killed = true;
+                }
 
                 if (use_pty and pty_master != null and pty_close_deadline_ms == null) {
                     pty_close_deadline_ms = milliTimestamp() + 250;
@@ -1156,8 +1219,13 @@ fn runExecSession(session: *ExecSession) !void {
         status = posix.waitpid(pid, 0).status;
     }
 
+    if (resource_group) |*group| {
+        group.killAll();
+        resource_usage = group.settle();
+    }
+
     const term = parseStatus(status.?);
-    const response = try protocol.encodeExecResponse(session.allocator, req.id, term.exit_code, term.signal);
+    const response = try protocol.encodeExecResponse(session.allocator, req.id, term.exit_code, term.signal, resource_usage);
     defer session.allocator.free(response);
     try session.tx.sendPayload(response);
 }
@@ -1238,12 +1306,229 @@ fn buildArgv(
     return argv_buf.ptr;
 }
 
-/// Install a Linux Landlock execute allow-list inherited by every descendant.
-fn applyExecutablePolicy(executables: []const []const u8) !void {
-    if (executables.len == 0) return;
+fn awaitResourceStartGate(gate: ?[2]posix.fd_t) !void {
+    if (gate) |fds| {
+        posix.close(fds[1]);
+        var byte: [1]u8 = undefined;
+        const n = try posix.read(fds[0], &byte);
+        posix.close(fds[0]);
+        if (n != 1) return error.ResourceStartGateClosed;
+    }
+}
+
+fn releaseResourceStartGate(
+    group: *?ResourceGroup,
+    gate: *?[2]posix.fd_t,
+    pid: posix.pid_t,
+) !void {
+    if (group.*) |*resource_group| {
+        const fds = gate.* orelse return error.ResourceStartGateMissing;
+        posix.close(fds[0]);
+        resource_group.attach(pid) catch {
+            posix.close(fds[1]);
+            gate.* = null;
+            _ = posix.kill(pid, posix.SIG.KILL) catch {};
+            _ = posix.waitpid(pid, 0);
+            return error.ResourceControllerUnavailable;
+        };
+        const byte: [1]u8 = .{1};
+        protocol.writeAll(fds[1], &byte) catch {
+            posix.close(fds[1]);
+            gate.* = null;
+            return error.ResourceStartGateClosed;
+        };
+        posix.close(fds[1]);
+        gate.* = null;
+    }
+}
+
+const ResourceGroup = struct {
+    path: []const u8,
+    limits: protocol.ExecResourceLimits,
+    exhausted: ?protocol.ExecResourceExhaustion = null,
+
+    fn create(
+        allocator: std.mem.Allocator,
+        id: u32,
+        limits: protocol.ExecResourceLimits,
+    ) !ResourceGroup {
+        try requireControlFile("/sys/fs/cgroup/cgroup.controllers");
+        try writeControlFile("/sys/fs/cgroup/cgroup.subtree_control", "+memory +pids");
+        const group_path = try std.fmt.allocPrint(allocator, "/sys/fs/cgroup/gondolin-exec-{d}", .{id});
+        const group_path_z = try allocator.dupeZ(u8, group_path);
+        if (c.mkdir(group_path_z.ptr, 0o700) != 0) return error.ResourceControllerUnavailable;
+        errdefer _ = c.rmdir(group_path_z.ptr);
+
+        var path_buf: [256]u8 = undefined;
+        const memory_max = try std.fmt.bufPrint(&path_buf, "{d}", .{limits.memory_bytes});
+        try writeGroupControl(group_path, "memory.max", memory_max);
+        const pids_max = try std.fmt.bufPrint(&path_buf, "{d}", .{limits.pids});
+        try writeGroupControl(group_path, "pids.max", pids_max);
+
+        for ([_][]const u8{
+            "cgroup.procs",
+            "cgroup.kill",
+            "cpu.stat",
+            "memory.events",
+            "memory.peak",
+            "pids.events",
+            "pids.peak",
+        }) |name| try requireGroupControl(group_path, name);
+
+        return .{ .path = group_path, .limits = limits };
+    }
+
+    fn attach(self: *ResourceGroup, pid: posix.pid_t) !void {
+        var buffer: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buffer, "{d}", .{pid});
+        try writeGroupControl(self.path, "cgroup.procs", value);
+    }
+
+    fn pollExhaustion(self: *ResourceGroup) bool {
+        if (self.exhausted != null) return true;
+        const memory_events = readGroupControl(self.path, "memory.events") catch return false;
+        if (controlCounter(memory_events, "oom_kill") > 0 or controlCounter(memory_events, "oom") > 0 or controlCounter(memory_events, "max") > 0) {
+            self.exhausted = .memory;
+            return true;
+        }
+        const pids_events = readGroupControl(self.path, "pids.events") catch return false;
+        if (controlCounter(pids_events, "max") > 0) {
+            self.exhausted = .pids;
+            return true;
+        }
+        const cpu_stat = readGroupControl(self.path, "cpu.stat") catch return false;
+        const cpu_ms = controlCounter(cpu_stat, "usage_usec") / 1000;
+        if (cpu_ms >= self.limits.cpu_time_ms) {
+            self.exhausted = .cpu;
+            return true;
+        }
+        return false;
+    }
+
+    fn killAll(self: *ResourceGroup) void {
+        writeGroupControl(self.path, "cgroup.kill", "1") catch {};
+    }
+
+    fn settle(self: *ResourceGroup) protocol.ExecResourceUsage {
+        _ = self.pollExhaustion();
+        self.killAll();
+        var attempts: usize = 0;
+        while (attempts < 100) : (attempts += 1) {
+            const procs = readGroupControl(self.path, "cgroup.procs") catch break;
+            if (std.mem.trim(u8, procs, " \r\n\t").len == 0) break;
+            posix.nanosleep(0, 1 * std.time.ns_per_ms);
+        }
+
+        const cpu_ms = blk: {
+            const value = readGroupControl(self.path, "cpu.stat") catch break :blk 0;
+            break :blk controlCounter(value, "usage_usec") / 1000;
+        };
+        const memory_peak = blk: {
+            const value = readGroupControl(self.path, "memory.peak") catch break :blk 0;
+            break :blk parseControlInteger(value);
+        };
+        const pids_peak = blk: {
+            const value = readGroupControl(self.path, "pids.peak") catch break :blk 0;
+            break :blk parseControlInteger(value);
+        };
+        const group_path_z = std.heap.page_allocator.dupeZ(u8, self.path) catch null;
+        var removed = false;
+        if (group_path_z) |path_z| {
+            defer std.heap.page_allocator.free(path_z);
+            removed = c.rmdir(path_z.ptr) == 0;
+        }
+        return .{
+            .cpu_time_ms = cpu_ms,
+            .memory_peak_bytes = memory_peak,
+            .pids_peak = pids_peak,
+            .exhausted = self.exhausted,
+            .resource_group_removed = removed,
+        };
+    }
+};
+
+threadlocal var control_read_buffer: [4096]u8 = undefined;
+
+fn controlPath(buffer: []u8, group: []const u8, name: []const u8) ![]const u8 {
+    return try std.fmt.bufPrint(buffer, "{s}/{s}", .{ group, name });
+}
+
+fn requireControlFile(file_path: []const u8) !void {
+    const file_path_z = try std.heap.page_allocator.dupeZ(u8, file_path);
+    defer std.heap.page_allocator.free(file_path_z);
+    const fd = c.open(file_path_z.ptr, c.O_RDONLY | c.O_CLOEXEC);
+    if (fd < 0) return error.ResourceControllerUnavailable;
+    _ = c.close(fd);
+}
+
+fn requireGroupControl(group: []const u8, name: []const u8) !void {
+    var buffer: [256]u8 = undefined;
+    try requireControlFile(try controlPath(&buffer, group, name));
+}
+
+fn writeControlFile(file_path: []const u8, value: []const u8) !void {
+    const file_path_z = try std.heap.page_allocator.dupeZ(u8, file_path);
+    defer std.heap.page_allocator.free(file_path_z);
+    const fd = c.open(file_path_z.ptr, c.O_WRONLY | c.O_CLOEXEC);
+    if (fd < 0) return error.ResourceControllerUnavailable;
+    defer _ = c.close(fd);
+    protocol.writeAll(fd, value) catch return error.ResourceControllerUnavailable;
+}
+
+fn writeGroupControl(group: []const u8, name: []const u8, value: []const u8) !void {
+    var buffer: [256]u8 = undefined;
+    try writeControlFile(try controlPath(&buffer, group, name), value);
+}
+
+fn readGroupControl(group: []const u8, name: []const u8) ![]const u8 {
+    var path_buffer: [256]u8 = undefined;
+    const file_path = try controlPath(&path_buffer, group, name);
+    const file_path_z = try std.heap.page_allocator.dupeZ(u8, file_path);
+    defer std.heap.page_allocator.free(file_path_z);
+    const fd = c.open(file_path_z.ptr, c.O_RDONLY | c.O_CLOEXEC);
+    if (fd < 0) return error.ResourceControllerUnavailable;
+    defer _ = c.close(fd);
+    const length = posix.read(fd, &control_read_buffer) catch return error.ResourceControllerUnavailable;
+    return control_read_buffer[0..length];
+}
+
+fn controlCounter(contents: []const u8, key: []const u8) u64 {
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |line| {
+        var fields = std.mem.tokenizeScalar(u8, line, ' ');
+        const found_key = fields.next() orelse continue;
+        if (!std.mem.eql(u8, found_key, key)) continue;
+        return std.fmt.parseInt(u64, fields.next() orelse return 0, 10) catch 0;
+    }
+    return 0;
+}
+
+fn parseControlInteger(contents: []const u8) u64 {
+    return std.fmt.parseInt(u64, std.mem.trim(u8, contents, " \r\n\t"), 10) catch 0;
+}
+
+/// Install inherited Linux Landlock execute and exact-write allow-lists.
+fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []const []const u8) !void {
+    if (executables.len == 0 and writable_paths.len == 0) return;
 
     var ruleset_attr: c.struct_landlock_ruleset_attr = std.mem.zeroes(c.struct_landlock_ruleset_attr);
-    ruleset_attr.handled_access_fs = c.LANDLOCK_ACCESS_FS_EXECUTE;
+    // Scoped invocations expose only pre-created exact writable files.  Handle
+    // every namespace-mutating right as well as writes/truncation so an
+    // invocation cannot create unaccounted state in guest tmpfs mounts such as
+    // /tmp, /run, /root, or cache directories.
+    ruleset_attr.handled_access_fs = c.LANDLOCK_ACCESS_FS_EXECUTE |
+        c.LANDLOCK_ACCESS_FS_WRITE_FILE |
+        c.LANDLOCK_ACCESS_FS_REMOVE_DIR |
+        c.LANDLOCK_ACCESS_FS_REMOVE_FILE |
+        c.LANDLOCK_ACCESS_FS_MAKE_CHAR |
+        c.LANDLOCK_ACCESS_FS_MAKE_DIR |
+        c.LANDLOCK_ACCESS_FS_MAKE_REG |
+        c.LANDLOCK_ACCESS_FS_MAKE_SOCK |
+        c.LANDLOCK_ACCESS_FS_MAKE_FIFO |
+        c.LANDLOCK_ACCESS_FS_MAKE_BLOCK |
+        c.LANDLOCK_ACCESS_FS_MAKE_SYM |
+        c.LANDLOCK_ACCESS_FS_REFER |
+        c.LANDLOCK_ACCESS_FS_TRUNCATE;
     const ruleset_fd_raw = c.syscall(
         c.SYS_landlock_create_ruleset,
         &ruleset_attr,
@@ -1275,6 +1560,31 @@ fn applyExecutablePolicy(executables: []const []const u8) !void {
         var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
         path_attr.allowed_access = c.LANDLOCK_ACCESS_FS_EXECUTE;
         path_attr.parent_fd = executable_fd;
+        if (c.syscall(
+            c.SYS_landlock_add_rule,
+            ruleset_fd,
+            c.LANDLOCK_RULE_PATH_BENEATH,
+            &path_attr,
+            0,
+        ) < 0) return error.LandlockRuleFailed;
+    }
+
+    for (writable_paths) |writable_path| {
+        const writable_z = try std.heap.page_allocator.dupeZ(u8, writable_path);
+        defer std.heap.page_allocator.free(writable_z);
+
+        var resolved: [c.PATH_MAX]u8 = undefined;
+        const resolved_ptr = c.realpath(writable_z.ptr, &resolved) orelse return error.InvalidWritablePath;
+        const resolved_path = std.mem.span(resolved_ptr);
+        if (!std.mem.eql(u8, writable_path, resolved_path)) return error.AliasedWritablePath;
+
+        const writable_fd = c.open(writable_z.ptr, c.O_PATH | c.O_CLOEXEC);
+        if (writable_fd < 0) return error.InvalidWritablePath;
+        defer _ = c.close(writable_fd);
+
+        var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
+        path_attr.allowed_access = c.LANDLOCK_ACCESS_FS_WRITE_FILE | c.LANDLOCK_ACCESS_FS_TRUNCATE;
+        path_attr.parent_fd = writable_fd;
         if (c.syscall(
             c.SYS_landlock_add_rule,
             ruleset_fd,

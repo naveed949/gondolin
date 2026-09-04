@@ -30,7 +30,13 @@ export {
   type VmFsDeleteOptions,
 } from "./vm/core.ts";
 export { VmCheckpoint, type VmCheckpointData } from "./checkpoint.ts";
-export { type ExecOptions, type ExecResult, type ExecProcess } from "./exec.ts";
+export {
+  type ExecOptions,
+  type ExecResult,
+  type ExecProcess,
+  type ExecResourceLimits,
+  type ExecResourceUsage,
+} from "./exec.ts";
 
 // Capability-aware, one-shot execution seam
 export {
@@ -40,7 +46,9 @@ export {
   EXACT_READER_GUARANTEES,
   EXACT_WRITER_GUARANTEES,
   HTTP_TLS_EGRESS_GUARANTEES,
+  DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
   CapabilityAdmissionError,
+  CapabilityCredentialStore,
   CapabilityInvocationContext,
   canonicalizeCapabilityInvocationRequest,
   getCapabilityInvocationFeatureManifest,
@@ -48,6 +56,10 @@ export {
   type CapabilityHttpMethod,
   type CapabilityNetworkRule,
   type CapabilityNetworkAuthority,
+  type CapabilityCredentialValidity,
+  type CapabilityCredentialProjection,
+  type CapabilityCredentialAuthority,
+  type TrustedCapabilityCredential,
   type ExactReaderCeiling,
   type ExactReaderInvocationRequest,
   type ExactWriterGuarantee,
@@ -61,6 +73,7 @@ export {
   type CapabilityEffect,
   type CapabilityFilesystemEffect,
   type CapabilityNetworkEffect,
+  type CapabilityCredentialEffect,
   type CapabilityTeardownEvidence,
   type CapabilityInvocationOutcome,
   type CapabilityInvocationEvidence,
@@ -81,6 +94,7 @@ export {
   type ScopedRunnerProcessEvent,
   type ScopedRunnerInvocationEvidence,
   type ScopedRunnerInvocationResult,
+  type ScopedRunnerResourceAccounting,
   type CanonicalScopedRunnerRequest,
 } from "./scoped-runner.ts";
 

@@ -15,6 +15,30 @@ export type OutputChunk = {
   text: string;
 };
 
+/** Resource limits installed by sandboxd before an exec entrypoint starts */
+export type ExecResourceLimits = {
+  /** Complete process-tree CPU time in `ms` */
+  cpuTimeMs: number;
+  /** Complete process-tree memory ceiling in `bytes` */
+  memoryBytes: number;
+  /** Maximum simultaneous entrypoint and descendant process count */
+  pids: number;
+};
+
+/** Guest-controller accounting returned after the resource group is empty */
+export type ExecResourceUsage = {
+  /** Complete process-tree CPU time in `ms` */
+  cpuTimeMs: number;
+  /** Peak complete process-tree memory in `bytes` */
+  memoryPeakBytes: number;
+  /** Peak simultaneous entrypoint and descendant process count */
+  pidsPeak: number;
+  /** Controller which caused termination */
+  exhausted: "cpu" | "memory" | "pids" | null;
+  /** Whether the guest resource group was empty and removed */
+  resourceGroupRemoved: boolean;
+};
+
 /**
  * Result of a completed exec command.
  */
@@ -22,6 +46,7 @@ export class ExecResult {
   readonly id: number;
   readonly exitCode: number;
   readonly signal?: number;
+  readonly resourceUsage?: ExecResourceUsage;
   private readonly _stdout: Buffer;
   private readonly _stderr: Buffer;
   private readonly _encoding: BufferEncoding;
@@ -33,12 +58,14 @@ export class ExecResult {
     stderr: Buffer,
     signal?: number,
     encoding: BufferEncoding = DEFAULT_ENCODING,
+    resourceUsage?: ExecResourceUsage,
   ) {
     this.id = id;
     this.exitCode = exitCode;
     this._stdout = stdout;
     this._stderr = stderr;
     this.signal = signal;
+    this.resourceUsage = resourceUsage;
     this._encoding = encoding;
   }
 
@@ -83,11 +110,7 @@ export class ExecResult {
 }
 
 export type ExecOutputMode =
-  | "buffer"
-  | "pipe"
-  | "inherit"
-  | "ignore"
-  | NodeJS.WritableStream;
+  "buffer" | "pipe" | "inherit" | "ignore" | NodeJS.WritableStream;
 
 /**
  * Options for exec.
@@ -111,6 +134,10 @@ export type ExecOptions = {
   clearEnv?: boolean;
   /** exact absolute executable paths permitted for the entrypoint and descendants */
   allowedExecutables?: string[];
+  /** exact absolute files permitted for complete-tree writes and truncation */
+  allowedWritablePaths?: string[];
+  /** fail-closed guest resource controllers installed before launch */
+  resourceLimits?: ExecResourceLimits;
 
   /** stdout handling (default: "buffer") */
   stdout?: ExecOutputMode;
@@ -454,8 +481,7 @@ export class ExecProcess
 
   then<TResult1 = ExecResult, TResult2 = never>(
     onfulfilled?:
-      | ((value: ExecResult) => TResult1 | PromiseLike<TResult1>)
-      | null,
+      ((value: ExecResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2> {
     return this.session.resultPromise.then(onfulfilled, onrejected);
@@ -800,6 +826,7 @@ export function finishExecSession(
   session: ExecSession,
   exitCode: number,
   signal?: number,
+  resourceUsage?: ExecResourceUsage,
 ): void {
   const result = new ExecResult(
     session.id,
@@ -808,6 +835,7 @@ export function finishExecSession(
     Buffer.concat(session.stderrChunks),
     signal,
     session.encoding,
+    resourceUsage,
   );
 
   session.stdoutPipe?.endStream();
