@@ -2,7 +2,7 @@ import fs from "fs";
 import net from "net";
 import os from "os";
 import path from "path";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { execFileSync } from "child_process";
 import { Duplex, Readable } from "stream";
 
@@ -143,6 +143,25 @@ const VFS_READY_ATTEMPTS = Math.max(
   Math.ceil(VFS_READY_TIMEOUT_MS / (VFS_READY_SLEEP_SECONDS * 1000)),
 );
 
+function digestAsset(filePath: string): string {
+  const hash = createHash("sha256");
+  const fd = fs.openSync(filePath, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    const stats = fs.fstatSync(fd);
+    let offset = 0;
+    while (offset < stats.size) {
+      const read = fs.readSync(fd, buffer, 0, buffer.length, offset);
+      if (read === 0) break;
+      hash.update(buffer.subarray(0, read));
+      offset += read;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
 type ExecInput = string | string[];
 
 type ExecStdin = boolean | string | Buffer | Readable | AsyncIterable<Buffer>;
@@ -203,6 +222,23 @@ export type SshAccess = {
 };
 
 export type VMState = SandboxState | "unknown";
+
+export type VmRuntimeIdentity = {
+  /** Selected VM backend */
+  vmm: "qemu" | "krun";
+  /** Node host platform */
+  hostPlatform: NodeJS.Platform;
+  /** Node host architecture */
+  hostArchitecture: string;
+  /** SHA-256 identity of the base root filesystem image */
+  imageDigest: string;
+  /** SHA-256 identity of the guest kernel */
+  guestKernelDigest: string;
+  /** SHA-256 identity of the guest control initramfs */
+  guestControlDigest: string;
+  /** Versioned guest enforcement features declared by the bound image */
+  guestFeatures: string[];
+};
 
 type RootDiskState = {
   /** root disk image path */
@@ -600,6 +636,22 @@ export class VM {
    */
   getHostPid(): number | null {
     return this.server?.getHostPid() ?? null;
+  }
+
+  /** Return cryptographic runtime identities used by host-authored evidence. */
+  getRuntimeIdentity(): VmRuntimeIdentity {
+    const manifest = loadAssetManifest(
+      path.dirname(this.resolvedSandboxOptions.kernelPath),
+    );
+    return {
+      vmm: this.resolvedSandboxOptions.vmm,
+      hostPlatform: process.platform,
+      hostArchitecture: process.arch,
+      imageDigest: digestAsset(this.resolvedSandboxOptions.rootfsPath),
+      guestKernelDigest: digestAsset(this.resolvedSandboxOptions.kernelPath),
+      guestControlDigest: digestAsset(this.resolvedSandboxOptions.initrdPath),
+      guestFeatures: [...(manifest?.guestFeatures ?? [])].sort(),
+    };
   }
 
   /**
@@ -1119,6 +1171,8 @@ fi
         cmd,
         argv: argv.length ? argv : undefined,
         env: mergedEnv && mergedEnv.length ? mergedEnv : undefined,
+        clear_env: options.clearEnv ? true : undefined,
+        allowed_executables: options.allowedExecutables,
         cwd: options.cwd,
         stdin: session.stdinEnabled ? true : undefined,
         pty: options.pty ? true : undefined,

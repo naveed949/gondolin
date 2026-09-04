@@ -42,6 +42,10 @@ test("builder: writeAssetManifest includes krun checksums when krun assets exist
     assert.equal(manifest.assets.krunInitrd, KRUN_INITRD_FILENAME);
     assert.ok(manifest.checksums.krunKernel);
     assert.ok(manifest.checksums.krunInitrd);
+    assert.deepEqual(manifest.guestFeatures, [
+      "exec.clear-env/v1",
+      "exec.landlock-allowlist/v1",
+    ]);
     assert.equal(
       manifest.buildId,
       computeAssetBuildId({ checksums: manifest.checksums, arch: "x86_64" }),

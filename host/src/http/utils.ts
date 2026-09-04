@@ -341,6 +341,7 @@ export function createLookupGuard(
             family: entry.family,
             port: info.port,
             protocol: info.protocol,
+            phase: "connection",
           } satisfies HttpIpAllowInfo);
           if (allowed) {
             if (!normalizedOptions.all) {
@@ -527,8 +528,7 @@ function evictSharedDispatchersIfNeeded(backend: QemuNetworkBackend) {
     backend.http.sharedDispatchers.size > DEFAULT_SHARED_UPSTREAM_MAX_ORIGINS
   ) {
     const oldestKey = backend.http.sharedDispatchers.keys().next().value as
-      | string
-      | undefined;
+      string | undefined;
     if (!oldestKey) break;
     evictSharedDispatcher(backend, oldestKey);
   }
@@ -543,8 +543,7 @@ export function getCheckedDispatcher(
   },
 ): Agent | null {
   const isIpAllowed = backend.options.httpHooks?.isIpAllowed as
-    | HttpHooks["isIpAllowed"]
-    | undefined;
+    HttpHooks["isIpAllowed"] | undefined;
   if (!isIpAllowed) return null;
 
   pruneSharedDispatchers(backend);

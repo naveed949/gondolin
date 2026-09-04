@@ -70,6 +70,33 @@ test("SandboxVfsProvider link returns ENOSYS without backend support", async () 
   );
 });
 
+test("SandboxVfsProvider hooks cover alias and path-resolution operations", async () => {
+  const provider = new MemoryProvider();
+  const target = await provider.open("/target.txt", "w");
+  await target.close();
+  const events: string[] = [];
+  const vfs = new SandboxVfsProvider(provider, {
+    before: (ctx) => events.push(`before:${ctx.op}`),
+    after: (ctx) => events.push(`after:${ctx.op}`),
+  });
+
+  await vfs.symlink("/target.txt", "/alias.txt");
+  assert.equal(await vfs.readlink("/alias.txt"), "/target.txt");
+  assert.equal(await vfs.realpath("/target.txt"), "/target.txt");
+  await vfs.access("/target.txt");
+
+  assert.deepEqual(events, [
+    "before:symlink",
+    "after:symlink",
+    "before:readlink",
+    "after:readlink",
+    "before:realpath",
+    "after:realpath",
+    "before:access",
+    "after:access",
+  ]);
+});
+
 test("SandboxVfsProvider sync operations reject async hooks", () => {
   const provider = new MemoryProvider();
   const vfs = new SandboxVfsProvider(provider, {

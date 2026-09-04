@@ -4,7 +4,13 @@ const protocol = sandboxd.protocol;
 const posix = sandboxd.posix;
 const file_requests = @import("file_requests.zig");
 const c = @cImport({
+    @cInclude("fcntl.h");
+    @cInclude("limits.h");
+    @cInclude("linux/landlock.h");
     @cInclude("pty.h");
+    @cInclude("sys/prctl.h");
+    @cInclude("sys/stat.h");
+    @cInclude("sys/syscall.h");
     @cInclude("unistd.h");
     @cInclude("sys/ioctl.h");
 });
@@ -49,6 +55,8 @@ const OwnedExecRequest = struct {
     cmd: []u8,
     argv: []const []const u8,
     env: []const []const u8,
+    clear_env: bool,
+    allowed_executables: []const []const u8,
     cwd: ?[]u8,
     stdin: bool,
     pty: bool,
@@ -61,6 +69,8 @@ const OwnedExecRequest = struct {
         allocator.free(self.argv);
         for (self.env) |entry| allocator.free(entry);
         allocator.free(self.env);
+        for (self.allowed_executables) |entry| allocator.free(entry);
+        allocator.free(self.allowed_executables);
         if (self.cwd) |cwd| allocator.free(cwd);
     }
 };
@@ -173,6 +183,17 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         env_len += 1;
     }
 
+    var allowed_executables = try allocator.alloc([]const u8, req.allowed_executables.len);
+    var allowed_len: usize = 0;
+    errdefer {
+        for (allowed_executables[0..allowed_len]) |entry| allocator.free(entry);
+        allocator.free(allowed_executables);
+    }
+    for (req.allowed_executables) |entry| {
+        allowed_executables[allowed_len] = try allocator.dupe(u8, entry);
+        allowed_len += 1;
+    }
+
     const cwd = if (req.cwd) |value| try allocator.dupe(u8, value) else null;
     errdefer if (cwd) |value| allocator.free(value);
 
@@ -184,6 +205,8 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         .cmd = cmd,
         .argv = argv,
         .env = env,
+        .clear_env = req.clear_env,
+        .allowed_executables = allowed_executables,
         .cwd = cwd,
         .stdin = req.stdin,
         .pty = req.pty,
@@ -282,6 +305,7 @@ pub fn main() !void {
             defer {
                 allocator.free(req.argv);
                 allocator.free(req.env);
+                allocator.free(req.allowed_executables);
             }
 
             startExecSession(&exec_sessions, &tx, req) catch |err| {
@@ -658,7 +682,12 @@ fn runExecSession(session: *ExecSession) !void {
     const arena_alloc = arena.allocator();
 
     const argv = try buildArgv(arena_alloc, req.cmd, req.argv);
-    const envp = try buildEnvp(arena_alloc, session.allocator, req.env);
+    const envp = try buildEnvp(
+        arena_alloc,
+        session.allocator,
+        req.env,
+        req.clear_env,
+    );
 
     const use_pty = req.pty;
     const wants_stdin = req.stdin or use_pty;
@@ -682,6 +711,11 @@ fn runExecSession(session: *ExecSession) !void {
         }
         pid = @intCast(forked);
         if (pid == 0) {
+            applyExecutablePolicy(req.allowed_executables) catch {
+                const msg = "executable policy failed\n";
+                _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+                posix.exit(126);
+            };
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
             }
@@ -746,6 +780,12 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.close(stdin_pipe.?[0]);
                 posix.close(stdin_pipe.?[1]);
             }
+
+            applyExecutablePolicy(req.allowed_executables) catch {
+                const msg = "executable policy failed\n";
+                _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+                posix.exit(126);
+            };
 
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
@@ -1198,23 +1238,80 @@ fn buildArgv(
     return argv_buf.ptr;
 }
 
+/// Install a Linux Landlock execute allow-list inherited by every descendant.
+fn applyExecutablePolicy(executables: []const []const u8) !void {
+    if (executables.len == 0) return;
+
+    var ruleset_attr: c.struct_landlock_ruleset_attr = std.mem.zeroes(c.struct_landlock_ruleset_attr);
+    ruleset_attr.handled_access_fs = c.LANDLOCK_ACCESS_FS_EXECUTE;
+    const ruleset_fd_raw = c.syscall(
+        c.SYS_landlock_create_ruleset,
+        &ruleset_attr,
+        @sizeOf(c.struct_landlock_ruleset_attr),
+        0,
+    );
+    if (ruleset_fd_raw < 0) return error.LandlockUnavailable;
+    const ruleset_fd: c_int = @intCast(ruleset_fd_raw);
+    defer _ = c.close(ruleset_fd);
+
+    for (executables) |executable| {
+        const executable_z = try std.heap.page_allocator.dupeZ(u8, executable);
+        defer std.heap.page_allocator.free(executable_z);
+
+        var resolved: [c.PATH_MAX]u8 = undefined;
+        const resolved_ptr = c.realpath(executable_z.ptr, &resolved) orelse return error.InvalidExecutable;
+        const resolved_path = std.mem.span(resolved_ptr);
+        if (!std.mem.eql(u8, executable, resolved_path)) return error.AliasedExecutable;
+
+        const executable_fd = c.open(executable_z.ptr, c.O_PATH | c.O_CLOEXEC);
+        if (executable_fd < 0) return error.InvalidExecutable;
+        defer _ = c.close(executable_fd);
+
+        var stat: c.struct_stat = undefined;
+        if (c.fstat(executable_fd, &stat) != 0 or stat.st_nlink != 1) {
+            return error.AliasedExecutable;
+        }
+
+        var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
+        path_attr.allowed_access = c.LANDLOCK_ACCESS_FS_EXECUTE;
+        path_attr.parent_fd = executable_fd;
+        if (c.syscall(
+            c.SYS_landlock_add_rule,
+            ruleset_fd,
+            c.LANDLOCK_RULE_PATH_BENEATH,
+            &path_attr,
+            0,
+        ) < 0) return error.LandlockRuleFailed;
+    }
+
+    if (c.prctl(c.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+        return error.NoNewPrivilegesFailed;
+    }
+    if (c.syscall(c.SYS_landlock_restrict_self, ruleset_fd, 0) < 0) {
+        return error.LandlockRestrictFailed;
+    }
+}
+
 fn buildEnvp(
     arena: std.mem.Allocator,
     allocator: std.mem.Allocator,
     env: []const []const u8,
+    clear_env: bool,
 ) ![*:null]const ?[*:0]const u8 {
-    if (env.len == 0) {
+    if (env.len == 0 and !clear_env) {
         return @ptrCast(std.c.environ);
     }
 
     var entries = std.ArrayList(?[*:0]const u8).empty;
     defer entries.deinit(allocator);
 
-    var current_idx: usize = 0;
-    while (std.c.environ[current_idx]) |entry_z| : (current_idx += 1) {
-        const entry = std.mem.span(entry_z);
-        if (isEnvOverridden(entry, env)) continue;
-        try entries.append(allocator, entry_z);
+    if (!clear_env) {
+        var current_idx: usize = 0;
+        while (std.c.environ[current_idx]) |entry_z| : (current_idx += 1) {
+            const entry = std.mem.span(entry_z);
+            if (isEnvOverridden(entry, env)) continue;
+            try entries.append(allocator, entry_z);
+        }
     }
 
     for (env) |entry| {

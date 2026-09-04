@@ -1,5 +1,11 @@
 # Gondolin
 
+> `VM.exec()`, `VM.shell()`, and the CLI are general lower-level interfaces and
+> are not AdaptiveSandbox-conformant invocation seams. Use the versioned
+> `CapabilityInvocationContext` exact-reader or exact-writer profile, or the
+> `ScopedRunnerInvocationContext` scoped-runner profile, when its negotiated
+> feature manifest satisfies the caller's required guarantees.
+
 **Local Linux micro-VMs with a fully programmable network stack and filesystem.**
 
 Gondolin runs lightweight micro-VMs on your Mac or Linux machine (QEMU by

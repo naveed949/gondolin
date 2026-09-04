@@ -1158,6 +1158,8 @@ export class SandboxServerOps {
       cmd: message.cmd,
       argv: message.argv ?? [],
       env: message.env ?? [],
+      clear_env: message.clear_env ?? false,
+      allowed_executables: message.allowed_executables ?? [],
       cwd: message.cwd,
       stdin: message.stdin ?? false,
       pty: message.pty ?? false,

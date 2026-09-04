@@ -2017,6 +2017,52 @@ test("qemu-net: fetchAndRespond follows redirects and rewrites POST->GET", async
   assert.ok(responseText.endsWith("ok"));
 });
 
+test("qemu-net: every redirect is re-authorized before the next fetch", async () => {
+  let fetchCalls = 0;
+  let policyCalls = 0;
+  const backend = makeBackend({
+    fetch: (async () => {
+      fetchCalls += 1;
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://other.example/next" },
+      });
+    }) as any,
+    httpHooks: {
+      isIpAllowed: () => true,
+      isRedirectAllowed: (source, target) => {
+        policyCalls += 1;
+        assert.equal(source.url, "http://example.com/start");
+        assert.equal(target.url, "https://other.example/next");
+        return false;
+      },
+    },
+  });
+  backend.options.dnsLookup = dnsLookupStub([
+    { address: "203.0.113.1", family: 4 },
+  ]);
+
+  await assert.rejects(
+    fetchHookAndRespond(
+      backend,
+      {
+        method: "GET",
+        target: "/start",
+        version: "HTTP/1.1",
+        headers: { host: "example.com" },
+        body: Buffer.alloc(0),
+      },
+      "http",
+      () => {},
+    ),
+    (error: unknown) =>
+      error instanceof HttpRequestBlockedError &&
+      /redirect blocked/.test(error.message),
+  );
+  assert.equal(fetchCalls, 1);
+  assert.equal(policyCalls, 1);
+});
+
 test("qemu-net: fetchAndRespond drops auth headers on cross-origin redirects", async () => {
   const calls: Array<{ url: string; init: any }> = [];
 
@@ -2067,6 +2113,33 @@ test("qemu-net: fetchAndRespond drops auth headers on cross-origin redirects", a
   await fetchHookAndRespond(backend, request, "https", () => {});
 
   assert.equal(calls.length, 2);
+});
+
+test("qemu-net: unsupported HTTP versions fail closed before fetch", async () => {
+  let fetchCalls = 0;
+  const writes: Buffer[] = [];
+  const backend = makeBackend({
+    fetch: (async () => {
+      fetchCalls += 1;
+      return new Response("unexpected");
+    }) as any,
+  });
+  const session: any = { http: undefined };
+
+  await qemuHttp.handleHttpDataWithWriter(
+    backend,
+    "h2-preface",
+    session,
+    Buffer.from("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"),
+    {
+      scheme: "http",
+      write: (chunk: Buffer) => writes.push(Buffer.from(chunk)),
+      finish: () => {},
+    },
+  );
+
+  assert.equal(fetchCalls, 0);
+  assert.match(Buffer.concat(writes).toString("utf8"), /^HTTP\/1\.1 505 /);
 });
 
 test("qemu-net: fetchAndRespond rejects OPTIONS * (asterisk-form)", async () => {

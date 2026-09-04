@@ -56,6 +56,19 @@ export type HttpIpAllowInfo = {
   port: number;
   /** url protocol */
   protocol: "http" | "https";
+  /** Enforcement phase for this DNS answer */
+  phase?: "resolution" | "connection";
+};
+
+export type NetworkFlowDecisionInfo = {
+  /** Classified guest transport */
+  protocol: "http" | "tls" | "ssh" | "tcp";
+  /** Guest-visible destination address */
+  destination: string;
+  /** Guest-visible destination port */
+  port: number;
+  /** Whether the classified transport was admitted */
+  allowed: boolean;
 };
 
 export type HttpHooks = {
@@ -63,6 +76,14 @@ export type HttpHooks = {
   isRequestAllowed?: (request: Request) => Promise<boolean> | boolean;
   /** allow/deny callback for resolved destination ip */
   isIpAllowed?: (info: HttpIpAllowInfo) => Promise<boolean> | boolean;
+  /** allow/deny callback evaluated before following each redirect */
+  isRedirectAllowed?: (
+    source: Request,
+    target: Request,
+  ) => Promise<boolean> | boolean;
+
+  /** host-observed classified TCP flow decision */
+  onFlowDecision?: (info: NetworkFlowDecisionInfo) => void;
 
   /** request hook (may rewrite request or short-circuit with response) */
   onRequest?: HttpOnRequestHook;

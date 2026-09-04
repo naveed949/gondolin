@@ -10,6 +10,7 @@ export {
   VM,
   type VMOptions,
   type VMState,
+  type VmRuntimeIdentity,
   type EnableSshOptions,
   type SshAccess,
   type VmFs,
@@ -30,6 +31,58 @@ export {
 } from "./vm/core.ts";
 export { VmCheckpoint, type VmCheckpointData } from "./checkpoint.ts";
 export { type ExecOptions, type ExecResult, type ExecProcess } from "./exec.ts";
+
+// Capability-aware, one-shot execution seam
+export {
+  CAPABILITY_CEILING_SCHEMA_VERSION,
+  CAPABILITY_INVOCATION_SCHEMA_VERSION,
+  CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+  EXACT_READER_GUARANTEES,
+  EXACT_WRITER_GUARANTEES,
+  HTTP_TLS_EGRESS_GUARANTEES,
+  CapabilityAdmissionError,
+  CapabilityInvocationContext,
+  canonicalizeCapabilityInvocationRequest,
+  getCapabilityInvocationFeatureManifest,
+  type ExactReaderGuarantee,
+  type CapabilityHttpMethod,
+  type CapabilityNetworkRule,
+  type CapabilityNetworkAuthority,
+  type ExactReaderCeiling,
+  type ExactReaderInvocationRequest,
+  type ExactWriterGuarantee,
+  type ExactWriterOperation,
+  type ExactWriterCeiling,
+  type ExactWriterInvocationRequest,
+  type CapabilityCeiling,
+  type CapabilityInvocationRequest,
+  type CapabilityInvocationRuntimeOptions,
+  type CapabilityEffectDecision,
+  type CapabilityEffect,
+  type CapabilityFilesystemEffect,
+  type CapabilityNetworkEffect,
+  type CapabilityTeardownEvidence,
+  type CapabilityInvocationOutcome,
+  type CapabilityInvocationEvidence,
+  type CapabilityInvocationResult,
+  type CanonicalCapabilityRequest,
+  type CapabilityFeatureStatus,
+  type CapabilityInvocationFeatureManifest,
+} from "./capability-invocation.ts";
+export {
+  SCOPED_RUNNER_GUARANTEES,
+  ScopedRunnerInvocationContext,
+  canonicalizeScopedRunnerInvocationRequest,
+  type ScopedRunnerGuarantee,
+  type ScopedRunnerCeiling,
+  type ScopedRunnerInvocationRequest,
+  type ScopedRunnerInvokeOptions,
+  type ScopedRunnerFilesystemEffect,
+  type ScopedRunnerProcessEvent,
+  type ScopedRunnerInvocationEvidence,
+  type ScopedRunnerInvocationResult,
+  type CanonicalScopedRunnerRequest,
+} from "./scoped-runner.ts";
 
 // Server for running the sandbox
 export { SandboxServer } from "./sandbox/server.ts";

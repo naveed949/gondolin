@@ -35,6 +35,10 @@ export type ExecCommandMessage = {
   argv?: string[];
   /** environment variables as `KEY=VALUE` */
   env?: string[];
+  /** whether guest daemon environment inheritance is disabled */
+  clear_env?: boolean;
+  /** exact executable paths enforced for the complete process tree */
+  allowed_executables?: string[];
   /** working directory */
   cwd?: string;
   /** whether stdin messages will be sent */

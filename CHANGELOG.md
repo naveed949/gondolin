@@ -5,6 +5,9 @@ All notable changes to Gondolin are documented here.
 ## Unreleased
 
 - Add the versioned one-shot QEMU Capability Invocation API, conformance evidence, and AdaptiveSandbox compatibility metadata. #1
+- Add the exact-writer profile with host-target identity pinning, no-ambient-read VFS enforcement, post-teardown commit, and distinct commit-failure evidence. #3
+- Add scoped-runner declarations, exact repository/ephemeral filesystem policy, clean environment projection, executable allow-listing, cancellation, and process-tree teardown evidence. #4
+- Add declarative invocation-scoped HTTP/TLS egress, redirect and resolution reauthorization, network evidence, and channel teardown. #6
 
 ## 0.12.0
 

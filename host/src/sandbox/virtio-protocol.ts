@@ -282,6 +282,10 @@ export type ExecRequest = {
     argv?: string[];
     /** environment variables as `KEY=VALUE` */
     env?: string[];
+    /** whether guest daemon environment inheritance is disabled */
+    clear_env?: boolean;
+    /** exact executable paths enforced for the complete process tree */
+    allowed_executables?: string[];
     /** working directory */
     cwd?: string;
     /** whether stdin messages will be sent */
@@ -472,6 +476,9 @@ export function buildExecRequest(
   const cleaned: ExecRequest["p"] = { cmd: payload.cmd };
   if (payload.argv !== undefined) cleaned.argv = payload.argv;
   if (payload.env !== undefined) cleaned.env = payload.env;
+  if (payload.clear_env !== undefined) cleaned.clear_env = payload.clear_env;
+  if (payload.allowed_executables !== undefined)
+    cleaned.allowed_executables = payload.allowed_executables;
   if (payload.cwd !== undefined) cleaned.cwd = payload.cwd;
   if (payload.stdin !== undefined) cleaned.stdin = payload.stdin;
   if (payload.pty !== undefined) cleaned.pty = payload.pty;

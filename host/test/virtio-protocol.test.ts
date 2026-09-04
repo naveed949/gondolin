@@ -138,6 +138,20 @@ test("virtio-protocol: buildExecRequest drops undefined optional fields", () => 
   });
 });
 
+test("virtio-protocol: buildExecRequest preserves explicit clean environment", () => {
+  const req = buildExecRequest(6, {
+    cmd: "/usr/bin/env",
+    env: [],
+    clear_env: true,
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/usr/bin/env",
+    env: [],
+    clear_env: true,
+  });
+});
+
 test("virtio-protocol: buildStdinData and buildPtyResize shape", () => {
   const stdin = buildStdinData(1, Buffer.from("hi"));
   assert.deepEqual(stdin, {

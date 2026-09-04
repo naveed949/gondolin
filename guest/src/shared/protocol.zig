@@ -42,6 +42,10 @@ pub const ExecRequest = struct {
     argv: []const []const u8,
     /// environment variables as `KEY=VALUE`
     env: []const []const u8,
+    /// whether to omit the sandbox daemon environment
+    clear_env: bool,
+    /// exact executable paths permitted for the complete process tree
+    allowed_executables: []const []const u8,
     /// working directory
     cwd: ?[]const u8,
     /// whether stdin frames will be sent
@@ -785,6 +789,14 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
     const env = try parseTextArray(allocator, cbor.getMapValue(payload, "env"));
     errdefer allocator.free(env);
 
+    const allowed_executables = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_executables"));
+    errdefer allocator.free(allowed_executables);
+
+    var clear_env = false;
+    if (cbor.getMapValue(payload, "clear_env")) |clear_env_val| {
+        clear_env = try expectBool(clear_env_val);
+    }
+
     var cwd: ?[]const u8 = null;
     if (cbor.getMapValue(payload, "cwd")) |cwd_val| {
         cwd = try expectText(cwd_val);
@@ -817,6 +829,8 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         .cmd = cmd,
         .argv = argv,
         .env = env,
+        .clear_env = clear_env,
+        .allowed_executables = allowed_executables,
         .cwd = cwd,
         .stdin = stdin_flag,
         .pty = pty_flag,

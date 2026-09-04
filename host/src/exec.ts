@@ -107,6 +107,10 @@ export type ExecOptions = {
   encoding?: BufferEncoding;
   /** abort signal */
   signal?: AbortSignal;
+  /** whether to execute with an empty environment instead of inheriting guest daemon state */
+  clearEnv?: boolean;
+  /** exact absolute executable paths permitted for the entrypoint and descendants */
+  allowedExecutables?: string[];
 
   /** stdout handling (default: "buffer") */
   stdout?: ExecOutputMode;
