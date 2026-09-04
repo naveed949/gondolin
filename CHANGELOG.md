@@ -4,6 +4,8 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Add the versioned one-shot QEMU Capability Invocation API, conformance evidence, and AdaptiveSandbox compatibility metadata. #1
+
 ## 0.12.0
 
 - Add `VM.getHostPid()` to allow callers to collect host-side process metrics of the VM runner. #114
