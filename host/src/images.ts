@@ -4,7 +4,11 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-import { loadAssetManifest, loadGuestAssets } from "./assets.ts";
+import {
+  getAssetVersion,
+  loadAssetManifest,
+  loadGuestAssets,
+} from "./assets.ts";
 import { gondolinCacheDir } from "./cache.ts";
 import type { Architecture } from "./build/config.ts";
 import { getHostNodeArchCached } from "./host/arch.ts";
@@ -17,8 +21,9 @@ const IMAGE_NAME_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const IMAGE_TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const BUILTIN_IMAGE_REGISTRY_SCHEMA = 1 as const;
-const DEFAULT_IMAGE_REGISTRY_URL =
-  "https://raw.githubusercontent.com/earendil-works/gondolin/main/builtin-image-registry.json";
+function defaultImageRegistryUrl(): string {
+  return `https://github.com/naveed949/gondolin/releases/download/${getAssetVersion()}/builtin-image-registry.json`;
+}
 
 const DOWNLOAD_SPINNER_FRAMES = [
   "⠋",
@@ -85,9 +90,7 @@ type ParsedImageRef = {
 };
 
 type ImageResolutionErrorCode =
-  | "object_not_found"
-  | "ref_not_found"
-  | "ref_arch_not_found";
+  "object_not_found" | "ref_not_found" | "ref_arch_not_found";
 
 class ImageResolutionError extends Error {
   /** stable resolution error code */
@@ -148,7 +151,7 @@ function registryCachePath(): string {
 
 function builtinRegistryUrl(): string {
   const value = process.env.GONDOLIN_IMAGE_REGISTRY_URL?.trim();
-  return value && value.length > 0 ? value : DEFAULT_IMAGE_REGISTRY_URL;
+  return value && value.length > 0 ? value : defaultImageRegistryUrl();
 }
 
 function normalizeImageArch(

@@ -4,6 +4,10 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.1
+
+- Experimental QEMU-only fork prerelease distributed as GitHub assets; npm publishing is disabled. This release does not claim AdaptiveSandbox qualification.
+
 - Add the versioned one-shot QEMU Capability Invocation API, conformance evidence, and AdaptiveSandbox compatibility metadata. #1
 - Add the exact-writer profile with host-target identity pinning, no-ambient-read VFS enforcement, post-teardown commit, and distinct commit-failure evidence. #3
 - Add scoped-runner declarations, exact repository/ephemeral filesystem policy, clean environment projection, executable allow-listing, cancellation, and process-tree teardown evidence. #4

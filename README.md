@@ -1,5 +1,10 @@
 # Gondolin Agent Sandbox
 
+> This fork distributes experimental QEMU builds through GitHub prereleases.
+> See [fork release and installation instructions](docs/fork-releases.md). The
+> upstream npm examples below do not install this fork. AdaptiveSandbox
+> qualification remains pending.
+
 **Local Linux micro-VMs with programmable network and filesystem control.**
 
 AI agents increasingly run generated code without human review. That code often

@@ -1,11 +1,11 @@
 {
   "name": "@earendil-works/gondolin-krun-runner-darwin-arm64",
-  "version": "0.12.0",
+  "version": "0.12.1-adaptivesandbox.1",
   "description": "Prebuilt gondolin-krun-runner binary for macOS arm64",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/earendil-works/gondolin.git",
+    "url": "https://github.com/naveed949/gondolin.git",
     "directory": "packages/gondolin-krun-runner-darwin-arm64"
   },
   "os": [
@@ -26,5 +26,6 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
-  }
+  },
+  "private": true
 }
