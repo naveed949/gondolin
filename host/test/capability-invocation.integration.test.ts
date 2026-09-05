@@ -193,7 +193,8 @@ test(
       ...request({ invocationId: "reader-malicious" }),
       launch: { executable: "/bin/busybox", args: ["cat", "/data/other.txt"] },
     });
-    assert.equal(malicious.outcome, "command_failed", malicious.error);
+    assert.equal(malicious.outcome, "policy_denied", malicious.error);
+    assert.ok(malicious.exitCode !== null && malicious.exitCode !== 0);
     assert.ok(
       malicious.evidence.denied.some(
         (effect) => effect.guestPath === "/data/other.txt",
@@ -210,10 +211,12 @@ test(
       ...request({ invocationId: "reader-undeclared-descendant" }),
       launch: {
         executable: "/bin/busybox",
-        args: ["sh", "-c", "/usr/bin/env"],
+        args: ["sh", "-c", "exec /usr/bin/env"],
       },
     });
+    // Kernel executable rejection has no host-observed filesystem denial event.
     assert.equal(descendant.outcome, "command_failed", descendant.error);
+    assert.deepEqual(descendant.evidence.denied, []);
     assert.notEqual(descendant.exitCode, 0);
     assert.equal(descendant.stdout, "");
     assert.equal(descendant.evidence.teardown.vmStopped, true);
@@ -366,11 +369,12 @@ test(
         },
         launch: {
           executable: "/bin/busybox",
-          args: ["sh", "-c", "/bin/busybox cat /data/output.txt >/dev/null"],
+          args: ["cat", "/data/output.txt"],
         },
       }),
     );
-    assert.equal(deniedRead.outcome, "command_failed", deniedRead.error);
+    assert.equal(deniedRead.outcome, "policy_denied", deniedRead.error);
+    assert.ok(deniedRead.exitCode !== null && deniedRead.exitCode !== 0);
     assert.ok(
       deniedRead.evidence.denied.some((effect) => effect.operation === "read"),
     );
@@ -388,17 +392,19 @@ test(
         },
         launch: {
           executable: "/bin/busybox",
-          args: [
-            "sh",
-            "-c",
-            "/bin/busybox ln /data/output.txt /data/alias.txt",
-          ],
+          args: ["ln", "/data/output.txt", "/data/alias.txt"],
         },
       }),
     );
-    assert.equal(deniedLink.outcome, "command_failed", deniedLink.error);
+    assert.equal(deniedLink.outcome, "policy_denied", deniedLink.error);
+    assert.ok(deniedLink.exitCode !== null && deniedLink.exitCode !== 0);
     assert.ok(
-      deniedLink.evidence.denied.some((effect) => effect.operation === "link"),
+      // The VFS can reject destination lookup before a link RPC is possible.
+      deniedLink.evidence.denied.some(
+        (effect) =>
+          effect.domain === "filesystem" &&
+          effect.guestPath === "/data/alias.txt",
+      ),
     );
 
     const truncated = await context.invoke(
@@ -641,7 +647,7 @@ test(
       const first = await context.invoke(
         credentialRequest(
           "credential-use-v1",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/echo`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/echo`,
         ),
       );
       assert.equal(first.outcome, "success", first.error);
@@ -659,10 +665,11 @@ test(
       const stale = await context.invoke(
         credentialRequest(
           "credential-stale-placeholder",
-          `busybox wget -qO- --header=\"X-Api-Token: ${stalePlaceholder}\" http://127.0.0.1:${address.port}/stale`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: ${stalePlaceholder}\" http://127.0.0.1:${address.port}/stale`,
         ),
       );
-      assert.equal(stale.outcome, "command_failed", stale.error);
+      assert.equal(stale.outcome, "policy_denied", stale.error);
+      assert.ok(stale.exitCode !== null && stale.exitCode !== 0);
       assert.ok(
         stale.evidence.denied.some(
           (effect) =>
@@ -674,10 +681,11 @@ test(
       const redirected = await context.invoke(
         credentialRequest(
           "credential-redirect-alias",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/redirect`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/redirect`,
         ),
       );
-      assert.equal(redirected.outcome, "command_failed", redirected.error);
+      assert.equal(redirected.outcome, "policy_denied", redirected.error);
+      assert.ok(redirected.exitCode !== null && redirected.exitCode !== 0);
       assert.ok(
         redirected.evidence.denied.some(
           (effect) =>
@@ -697,7 +705,7 @@ test(
       const rotated = await context.invoke(
         credentialRequest(
           "credential-use-v2",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/rotated`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/rotated`,
         ),
       );
       assert.equal(rotated.outcome, "success", rotated.error);
@@ -709,10 +717,11 @@ test(
       const revoked = await context.invoke(
         credentialRequest(
           "credential-revoked",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/revoked`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/revoked`,
         ),
       );
-      assert.equal(revoked.outcome, "command_failed", revoked.error);
+      assert.equal(revoked.outcome, "policy_denied", revoked.error);
+      assert.ok(revoked.exitCode !== null && revoked.exitCode !== 0);
       assert.ok(
         revoked.evidence.denied.some(
           (effect) =>
@@ -733,10 +742,11 @@ test(
       const expired = await context.invoke(
         credentialRequest(
           "credential-expired",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/expired`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/expired`,
         ),
       );
-      assert.equal(expired.outcome, "command_failed", expired.error);
+      assert.equal(expired.outcome, "policy_denied", expired.error);
+      assert.ok(expired.exitCode !== null && expired.exitCode !== 0);
       assert.ok(
         expired.evidence.denied.some(
           (effect) =>
