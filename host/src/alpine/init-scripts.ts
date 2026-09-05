@@ -100,7 +100,9 @@ setup_mitm_ca() {
   done
 
   mitm_ca_cert="/etc/gondolin/mitm/ca.crt"
-  if [ ! -r "\${mitm_ca_cert}" ]; then
+  # A network-disabled VM has no eth0 and no authority to read the MITM mount.
+  # Avoid probing it during boot: denied VFS operations are invocation evidence.
+  if [ ! -d /sys/class/net/eth0 ] || [ ! -r "\${mitm_ca_cert}" ]; then
     if [ -n "\${system_ca_bundle}" ]; then
       export SSL_CERT_FILE="\${system_ca_bundle}"
     fi
@@ -143,6 +145,8 @@ mount -t proc proc /proc || log "[init] mount proc failed"
 mount -t sysfs sysfs /sys || log "[init] mount sysfs failed"
 mkdir -p /sys/fs/cgroup
 mount -t cgroup2 cgroup2 /sys/fs/cgroup || log "[init] mount cgroup2 failed"
+mkdir -p /sys/fs/bpf
+mount -t bpf bpf /sys/fs/bpf || log "[init] mount bpffs failed"
 mount -t devtmpfs devtmpfs /dev || log "[init] mount devtmpfs failed"
 
 mkdir -p /dev/pts /dev/shm /run

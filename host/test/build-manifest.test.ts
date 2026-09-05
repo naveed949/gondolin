@@ -68,7 +68,7 @@ test("builder: descendant denial is bound to the embedded sandboxd", () => {
     fs.writeFileSync(path.join(dir, ROOTFS_FILENAME), "rootfs");
     fs.writeFileSync(
       sandboxdPath,
-      "binary-gondolin-feature:exec.descendants-denied/v1-binary",
+      "binary-gondolin-feature:exec.descendants-denied/v1-gondolin-feature:exec.exact-path-lsm/v1-gondolin-feature:exec.payload-confinement/v1-binary",
     );
 
     const { manifest } = writeAssetManifest(
@@ -78,7 +78,13 @@ test("builder: descendant denial is bound to the embedded sandboxd", () => {
       sandboxdPath,
     );
 
-    assert.ok(manifest.guestFeatures.includes("exec.descendants-denied/v1"));
+    for (const feature of [
+      "exec.descendants-denied/v1",
+      "exec.exact-path-lsm/v1",
+      "exec.payload-confinement/v1",
+    ]) {
+      assert.ok(manifest.guestFeatures.includes(feature));
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

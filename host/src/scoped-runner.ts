@@ -355,13 +355,7 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
   };
   /** Resource which caused termination */
   exhausted:
-    | "cpu"
-    | "memory"
-    | "pids"
-    | "storage"
-    | "output"
-    | "wall-time"
-    | null;
+    "cpu" | "memory" | "pids" | "storage" | "output" | "wall-time" | null;
   /** Trust source for the reported exhaustion classification */
   exhaustionObservation: "host-observed" | "guest-reported" | null;
   /** Trust source for each usage measurement */
@@ -668,6 +662,8 @@ export class ScopedRunnerInvocationContext {
           ? ["exec.descendants-denied/v1"]
           : []),
         "exec.executable-mount-policy/v1",
+        "exec.exact-path-lsm/v1",
+        "exec.payload-confinement/v1",
         "exec.landlock-allowlist/v1",
         "exec.namespace-isolation/v1",
         "exec.resource-limits/v1",

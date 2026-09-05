@@ -103,13 +103,7 @@ export type ExactReaderGuarantee =
   | (typeof DESTINATION_BOUND_CREDENTIAL_GUARANTEES)[number];
 
 export type CapabilityHttpMethod =
-  | "GET"
-  | "HEAD"
-  | "POST"
-  | "PUT"
-  | "PATCH"
-  | "DELETE"
-  | "OPTIONS";
+  "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 export type CapabilityNetworkRule = {
   /** Content-aware transport, where `tls` means HTTP/1.x over TLS */
@@ -450,8 +444,7 @@ export type ExactWriterInvocationRequest = {
 
 export type CapabilityCeiling = ExactReaderCeiling | ExactWriterCeiling;
 export type CapabilityInvocationRequest =
-  | ExactReaderInvocationRequest
-  | ExactWriterInvocationRequest;
+  ExactReaderInvocationRequest | ExactWriterInvocationRequest;
 
 export type CapabilityInvocationRuntimeOptions = {
   /** QEMU executable path */
@@ -477,11 +470,7 @@ export type CapabilityInvocationRuntimeOptions = {
 };
 
 export type CapabilityEffectDecision =
-  | "requested"
-  | "granted"
-  | "attempted"
-  | "denied"
-  | "observed";
+  "requested" | "granted" | "attempted" | "denied" | "observed";
 
 export type CapabilityFilesystemEffect = AuthenticatedEvidenceEvent & {
   /** Capability domain */
@@ -553,12 +542,7 @@ export type CapabilityCredentialEffect = AuthenticatedEvidenceEvent & {
   method?: string;
   /** Non-sensitive denial classification */
   reason?:
-    | "missing"
-    | "expired"
-    | "revoked"
-    | "mismatch"
-    | "stale"
-    | "inactive";
+    "missing" | "expired" | "revoked" | "mismatch" | "stale" | "inactive";
   /** Relationship of this event to enforcement */
   decision: CapabilityEffectDecision;
 };
@@ -1296,6 +1280,8 @@ export class CapabilityInvocationContext {
         "exec.clear-env/v1",
         "exec.descendants-denied/v1",
         "exec.executable-mount-policy/v1",
+        "exec.exact-path-lsm/v1",
+        "exec.payload-confinement/v1",
         "exec.landlock-allowlist/v1",
       ]) {
         if (!runtime.guestFeatures.includes(feature)) {
@@ -1331,6 +1317,8 @@ export class CapabilityInvocationContext {
           clearEnv: true,
           allowedExecutables: [request.launch.executable],
           denyDescendants: true,
+          isolateIpc: true,
+          isolateDevices: true,
           env: credentialMediator?.environment,
           signal: abort.signal,
           stdin: false,
@@ -1601,6 +1589,8 @@ export class CapabilityInvocationContext {
         "exec.clear-env/v1",
         "exec.descendants-denied/v1",
         "exec.executable-mount-policy/v1",
+        "exec.exact-path-lsm/v1",
+        "exec.payload-confinement/v1",
         "exec.landlock-allowlist/v1",
       ]) {
         if (!runtime.guestFeatures.includes(feature)) {
@@ -1636,6 +1626,8 @@ export class CapabilityInvocationContext {
           clearEnv: true,
           allowedExecutables: [request.launch.executable],
           denyDescendants: true,
+          isolateIpc: true,
+          isolateDevices: true,
           signal: abort.signal,
           stdin: false,
           pty: false,
