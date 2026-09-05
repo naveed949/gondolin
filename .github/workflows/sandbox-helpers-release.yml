@@ -3,6 +3,11 @@ name: Sandbox Helpers Release
 on:
   workflow_dispatch:
     inputs:
+      publish:
+        description: "Publish standalone release and update registry"
+        required: false
+        type: boolean
+        default: true
       version:
         description: "Gondolin version (e.g. 0.8.1 or v0.8.1)"
         required: true
@@ -13,6 +18,11 @@ on:
         type: string
   workflow_call:
     inputs:
+      publish:
+        description: "Publish standalone release and update registry"
+        required: false
+        type: boolean
+        default: true
       version:
         description: "Gondolin version (e.g. 0.8.1 or v0.8.1)"
         required: true
@@ -140,6 +150,7 @@ jobs:
           retention-days: 7
 
   publish-helper-release:
+    if: inputs.publish != false
     name: Publish sandbox helper release
     needs: [prepare, build-helper-archive]
     runs-on: ubuntu-latest

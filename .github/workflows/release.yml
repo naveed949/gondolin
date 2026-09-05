@@ -1,231 +1,134 @@
-name: Release
+name: Experimental GitHub Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*-adaptivesandbox.*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag (e.g., v0.1.0)"
+        description: "Existing experimental tag, e.g. v0.12.1-adaptivesandbox.1"
         required: true
         type: string
 
+concurrency:
+  group: fork-release-${{ inputs.version || github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+
 jobs:
-  create-release:
-    name: Create Package Release
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      release_tag: ${{ steps.version.outputs.version }}
-      npm_version: ${{ steps.npm_version.outputs.version }}
-    permissions:
-      contents: write
+      tag: ${{ steps.identity.outputs.tag }}
+      version: ${{ steps.identity.outputs.version }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
+          ref: ${{ inputs.version || github.ref }}
           fetch-depth: 0
-
-      - name: Get version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Get npm version
-        id: npm_version
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: Release ${{ steps.version.outputs.version }}
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
-          body: |
-            ## Gondolin ${{ steps.version.outputs.version }}
-
-            ### NPM Packages
-
-            ```bash
-            npm install @earendil-works/gondolin@${{ steps.npm_version.outputs.version }}
-            ```
-
-            Platform runner packages are published as optional dependencies for supported krun targets.
-
-            ### Sandbox Helpers
-
-            Sandbox helper binary bundles are published to `sandbox-helpers--${{ steps.npm_version.outputs.version }}` and registered in `builtin-sandbox-helper-registry.json`.
-
-            ### Guest Images
-
-            Guest images are published independently via the Image Release workflow.
-
-            Runtime image resolution uses `builtin-image-registry.json` from the main branch.
-
-  publish-sandbox-helpers:
-    name: Publish sandbox helpers
-    needs: [create-release]
-    uses: ./.github/workflows/sandbox-helpers-release.yml
-    permissions:
-      contents: write
-    with:
-      version: ${{ needs.create-release.outputs.npm_version }}
-      source_ref: ${{ needs.create-release.outputs.release_tag }}
-
-  publish-krun-runner:
-    name: Publish krun runner (${{ matrix.package_name }})
-    needs: [create-release, publish-sandbox-helpers]
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            package_dir: packages/gondolin-krun-runner-linux-x64
-            package_name: '@earendil-works/gondolin-krun-runner-linux-x64'
-          - runner: macos-14
-            package_dir: packages/gondolin-krun-runner-darwin-arm64
-            package_name: '@earendil-works/gondolin-krun-runner-darwin-arm64'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
-          fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Install Zig
-        run: scripts/install-zig.sh 0.16.0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
+      - name: Validate existing tag and synchronized prerelease versions
+        id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.version || github.ref_name }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential curl git make pkg-config clang lld xz-utils \
-            libclang-dev llvm-dev libcap-ng-dev
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { releaseIdentity } from './scripts/package-fork-release.mjs';
+          if (process.env.GITHUB_REPOSITORY !== 'naveed949/gondolin') throw new Error('fork release repository mismatch');
+          const tag = process.env.RELEASE_TAG;
+          if (!/^v0\.12\.1-adaptivesandbox\.[1-9][0-9]*$/.test(tag)) throw new Error('unsupported release tag');
+          const sha = execFileSync('git', ['rev-parse', `refs/tags/${tag}^{commit}`], {encoding: 'utf8'}).trim();
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          if (head !== sha) throw new Error('checkout/tag mismatch');
+          const identity = releaseIdentity(process.cwd(), tag, sha);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nversion=${identity.version}\nsource_sha=${sha}\n`);
+          JS
 
-      - name: Install macOS build dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install llvm lld xz
+  validate:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_ref: ${{ needs.prepare.outputs.source_sha }}
 
-      - name: Build krun runner
-        run: make krun-runner
+  helpers:
+    needs: [prepare, validate]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/sandbox-helpers-release.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      source_ref: ${{ needs.prepare.outputs.source_sha }}
+      publish: false
 
-      - name: Prepare package payload
-        run: |
-          node scripts/prepare-krun-runner-package.mjs \
-            --package "${{ matrix.package_dir }}"
+  images:
+    needs: [prepare, validate]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/image-release.yml
+    with:
+      image_tag: ${{ needs.prepare.outputs.version }}
+      source_ref: ${{ needs.prepare.outputs.source_sha }}
+      build_config: images/alpine-base.json
+      image_name: alpine-base
+      publish: false
 
-      - name: Verify package version matches tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          TAG_VERSION="${VERSION#v}"
-          PKG_VERSION=$(node -p "require('./${{ matrix.package_dir }}/package.json').version")
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "❌ Version mismatch for ${{ matrix.package_name }}: package.json has $PKG_VERSION but tag is v$TAG_VERSION"
-            exit 1
-          fi
-          echo "✅ Version matches: $PKG_VERSION"
-
-      - name: Smoke test packed package
-        run: |
-          PKG_DIR="${{ matrix.package_dir }}"
-          PKG_TGZ=$(cd "$PKG_DIR" && npm pack --silent)
-          PKG_PATH="$PWD/$PKG_DIR/$PKG_TGZ"
-
-          TMP_DIR=$(mktemp -d)
-          cd "$TMP_DIR"
-          npm init -y >/dev/null
-          npm install "$PKG_PATH" >/dev/null
-          ./node_modules/.bin/gondolin-krun-runner --version
-
-      - name: Publish runner package (with provenance)
-        run: |
-          cd "${{ matrix.package_dir }}"
-          npm publish --access public --provenance
-
-  publish-npm:
-    name: Publish main package to NPM
-    needs: [create-release, publish-sandbox-helpers, publish-krun-runner]
+  publish:
+    needs: [prepare, validate, helpers, images]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
-          fetch-depth: 0
-
+          ref: ${{ needs.prepare.outputs.source_sha }}
       - uses: pnpm/action-setup@v2
         with:
           version: 8
-
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Get version from tag
-        id: tag_version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @earendil-works/gondolin run build
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sandbox-helpers-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: release-assets
+          merge-multiple: true
+      - name: Assemble package and checksum-bound registries
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: node scripts/package-fork-release.mjs release-assets "$RELEASE_TAG" "$SOURCE_SHA"
+      - name: Verify installed packed API and CLI
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          VERSION="${VERSION#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Verify version matches
+          PACKAGE_PATH=$(realpath release-assets/*.tgz)
+          INSTALL_DIR=$(mktemp -d)
+          cd "$INSTALL_DIR"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$PACKAGE_PATH"
+          node --input-type=module -e 'const g = await import("@earendil-works/gondolin"); for (const k of ["CapabilityInvocationContext", "ScopedRunnerInvocationContext", "verifyCapabilityInvocationResult"]) { if (!(k in g)) throw new Error(`missing packaged API: ${k}`); }'
+          ./node_modules/.bin/gondolin --help >/dev/null
+      - name: Verify all final asset checksums
+        run: cd release-assets && sha256sum --check SHA256SUMS
+      - name: Publish experimental prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          cd host
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          TAG_VERSION="${{ steps.tag_version.outputs.version }}"
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "❌ Version mismatch: package.json has $PKG_VERSION but tag is v$TAG_VERSION"
-            echo "   Update host/package.json version to $TAG_VERSION before releasing"
-            exit 1
-          fi
-          echo "✅ Version matches: $PKG_VERSION"
-
-      - name: Verify runner dependency versions
-        run: |
-          TAG_VERSION="${{ steps.tag_version.outputs.version }}"
-          node -e 'const pkg = require("./host/package.json"); const deps = pkg.optionalDependencies || {}; for (const [name, version] of Object.entries(deps)) { if (version !== process.argv[1]) { console.error(`❌ ${name} version ${version} does not match tag version ${process.argv[1]}`); process.exit(1); } } console.log("✅ Runner optional dependency versions match tag");' "$TAG_VERSION"
-
-      - name: Build package artifacts
-        run: pnpm --filter @earendil-works/gondolin run build
-
-      - name: Verify packaged CLI runtime
-        run: node host/dist/bin/gondolin.js --help >/dev/null
-
-      - name: Publish to NPM (with provenance)
-        run: |
-          cd host
-          npm publish --access public --provenance
+          # Never overwrite an existing release or its artifacts.
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo naveed949/gondolin --verify-tag --prerelease --latest=false \
+            --title "Gondolin $RELEASE_TAG (experimental QEMU)" \
+            --notes-file docs/experimental-release-notes.md

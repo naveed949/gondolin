@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
+import { getAssetVersion } from "../assets.ts";
 import { extractTarGz } from "../alpine/tar.ts";
 import type { Architecture } from "./config.ts";
 import {
@@ -16,8 +17,9 @@ import {
 const SANDBOX_HELPER_REGISTRY_SCHEMA = 1 as const;
 const SANDBOX_HELPER_MANIFEST_SCHEMA = 1 as const;
 const SANDBOX_HELPER_KIND = "gondolin-sandbox-helpers" as const;
-const DEFAULT_SANDBOX_HELPER_REGISTRY_URL =
-  "https://raw.githubusercontent.com/earendil-works/gondolin/main/builtin-sandbox-helper-registry.json";
+function defaultSandboxHelperRegistryUrl(): string {
+  return `https://github.com/naveed949/gondolin/releases/download/${getAssetVersion()}/builtin-sandbox-helper-registry.json`;
+}
 
 const HELPER_BUILD_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -149,7 +151,7 @@ function sandboxHelperRegistryUrl(value?: string): string {
   const explicit = value?.trim();
   if (explicit && explicit.length > 0) return explicit;
   if (envValue && envValue.length > 0) return envValue;
-  return DEFAULT_SANDBOX_HELPER_REGISTRY_URL;
+  return defaultSandboxHelperRegistryUrl();
 }
 
 function helperObjectRootDir(storeDir: string): string {
@@ -157,10 +159,15 @@ function helperObjectRootDir(storeDir: string): string {
 }
 
 function helperObjectDir(storeDir: string, buildId: string): string {
-  return path.join(helperObjectRootDir(storeDir), normalizeHelperBuildId(buildId));
+  return path.join(
+    helperObjectRootDir(storeDir),
+    normalizeHelperBuildId(buildId),
+  );
 }
 
-function normalizeArchitecture(value: string | undefined | null): Architecture | null {
+function normalizeArchitecture(
+  value: string | undefined | null,
+): Architecture | null {
   if (!value) return null;
   const lower = value.toLowerCase();
   if (lower === "aarch64" || lower === "arm64") return "aarch64";
@@ -351,7 +358,9 @@ function parseBuiltinSandboxHelperRegistry(
     typeof rec.builds !== "object" ||
     Array.isArray(rec.builds)
   ) {
-    throw new Error("invalid builtin sandbox helper registry: builds must be an object");
+    throw new Error(
+      "invalid builtin sandbox helper registry: builds must be an object",
+    );
   }
 
   const builds: Record<string, RegistrySandboxHelperSource> = {};
@@ -367,7 +376,9 @@ function parseBuiltinSandboxHelperRegistry(
   }
 
   if (!rec.refs || typeof rec.refs !== "object" || Array.isArray(rec.refs)) {
-    throw new Error("invalid builtin sandbox helper registry: refs must be an object");
+    throw new Error(
+      "invalid builtin sandbox helper registry: refs must be an object",
+    );
   }
 
   const refs: Record<string, Partial<Record<Architecture, string>>> = {};
@@ -376,7 +387,9 @@ function parseBuiltinSandboxHelperRegistry(
   )) {
     const parsedRef = parseSandboxHelperRef(reference);
     if (parsedRef.canonical !== reference) {
-      throw new Error(`invalid builtin sandbox helper registry ref key: ${reference}`);
+      throw new Error(
+        `invalid builtin sandbox helper registry ref key: ${reference}`,
+      );
     }
 
     if (!archMap || typeof archMap !== "object" || Array.isArray(archMap)) {
@@ -389,7 +402,9 @@ function parseBuiltinSandboxHelperRegistry(
     )) {
       const arch = normalizeArchitecture(archKey);
       if (!arch) {
-        throw new Error(`invalid registry ref '${reference}' arch key: ${archKey}`);
+        throw new Error(
+          `invalid registry ref '${reference}' arch key: ${archKey}`,
+        );
       }
       if (typeof value !== "string") {
         throw new Error(
@@ -481,7 +496,9 @@ function parseSandboxHelperManifest(raw: unknown): SandboxHelperManifest {
     );
   }
   if (rec.kind !== SANDBOX_HELPER_KIND) {
-    throw new Error(`invalid sandbox helper manifest kind: ${String(rec.kind)}`);
+    throw new Error(
+      `invalid sandbox helper manifest kind: ${String(rec.kind)}`,
+    );
   }
   if (typeof rec.gondolinVersion !== "string" || !rec.gondolinVersion) {
     throw new Error("invalid sandbox helper manifest gondolinVersion");
@@ -493,7 +510,11 @@ function parseSandboxHelperManifest(raw: unknown): SandboxHelperManifest {
   if (!arch) {
     throw new Error(`invalid sandbox helper manifest arch: ${rec.arch}`);
   }
-  if (!rec.checksums || typeof rec.checksums !== "object" || Array.isArray(rec.checksums)) {
+  if (
+    !rec.checksums ||
+    typeof rec.checksums !== "object" ||
+    Array.isArray(rec.checksums)
+  ) {
     throw new Error("invalid sandbox helper manifest checksums");
   }
 
@@ -589,12 +610,16 @@ function assertExecutableFiles(paths: SandboxHelperBinaryPaths): void {
       throw new Error(`sandbox helper binary not found: ${filePath}`);
     }
     if (!stat.isFile()) {
-      throw new Error(`sandbox helper binary is not a regular file: ${filePath}`);
+      throw new Error(
+        `sandbox helper binary is not a regular file: ${filePath}`,
+      );
     }
   }
 }
 
-function computeHelperChecksums(paths: SandboxHelperBinaryPaths): SandboxHelperChecksums {
+function computeHelperChecksums(
+  paths: SandboxHelperBinaryPaths,
+): SandboxHelperChecksums {
   const checksums = {} as SandboxHelperChecksums;
   for (const name of SANDBOX_HELPER_BINARY_NAMES) {
     checksums[name] = computeFileHash(pathForHelperName(paths, name));
@@ -701,7 +726,9 @@ async function importSandboxHelpersFromSource(
       source: "cache",
     });
     if (!extracted.manifest) {
-      throw new Error("downloaded sandbox helper archive is missing manifest.json");
+      throw new Error(
+        "downloaded sandbox helper archive is missing manifest.json",
+      );
     }
     if (extracted.buildId !== expectedBuildId) {
       throw new Error(
@@ -751,7 +778,8 @@ async function importSandboxHelpersFromSource(
 export async function ensureSandboxHelperBinaries(
   options: ResolveSandboxHelperOptions,
 ): Promise<ResolvedSandboxHelpers> {
-  const gondolinVersion = options.gondolinVersion ?? resolveHostPackageVersion();
+  const gondolinVersion =
+    options.gondolinVersion ?? resolveHostPackageVersion();
   const explicitHelpersDir =
     options.helpersDir ?? process.env.GONDOLIN_SANDBOX_HELPERS_DIR;
 

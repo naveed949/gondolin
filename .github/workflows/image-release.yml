@@ -3,6 +3,11 @@ name: Image Release
 on:
   workflow_dispatch:
     inputs:
+      publish:
+        description: "Publish standalone release and update registry"
+        required: false
+        type: boolean
+        default: true
       image_tag:
         description: "Image tag (e.g. 1.0.0)"
         required: true
@@ -20,6 +25,24 @@ on:
         description: "Git ref to build from (branch/tag/sha)"
         required: false
         type: string
+
+  workflow_call:
+    inputs:
+      image_tag:
+        required: true
+        type: string
+      source_ref:
+        required: true
+        type: string
+      build_config:
+        default: "images/alpine-base.json"
+        type: string
+      image_name:
+        default: "alpine-base"
+        type: string
+      publish:
+        default: true
+        type: boolean
 
 jobs:
   prepare:
@@ -197,6 +220,7 @@ jobs:
           NODE_BIN="$(node -p 'process.execPath')"
           cd guest
           ALPINE_ARCH=${{ matrix.arch }} \
+          GONDOLIN_SANDBOX_HELPERS_DIR="$PWD/zig-out" \
           GONDOLIN_BUILD_CONFIG="../${{ needs.prepare.outputs.build_config }}" \
           make build NODE="$NODE_BIN"
 
@@ -237,6 +261,7 @@ jobs:
           retention-days: 7
 
   publish-image-release:
+    if: inputs.publish != false
     name: Publish Image Release
     needs: [prepare, build-image]
     runs-on: ubuntu-latest

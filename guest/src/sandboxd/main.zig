@@ -10,6 +10,7 @@ const c = @cImport({
     @cInclude("linux/landlock.h");
     @cInclude("pty.h");
     @cInclude("sched.h");
+    @cInclude("stdlib.h");
     @cInclude("sys/prctl.h");
     @cInclude("sys/mount.h");
     @cInclude("sys/stat.h");
@@ -19,7 +20,7 @@ const c = @cImport({
 });
 
 const log = std.log.scoped(.sandboxd);
-pub const std_options = .{
+pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
@@ -707,10 +708,8 @@ fn execWorker(session: *ExecSession) void {
             error.ResourceStartGateMissing,
             error.ResourceStartGateClosed,
             => "resource_controller_unavailable",
-            error.NamespaceIsolationUnavailable =>
-            "namespace_isolation_unavailable",
-            error.CapabilityPolicyUnavailable =>
-            "capability_policy_unavailable",
+            error.NamespaceIsolationUnavailable => "namespace_isolation_unavailable",
+            error.CapabilityPolicyUnavailable => "capability_policy_unavailable",
             else => "exec_failed",
         };
         const message: []const u8 = if (std.mem.eql(
@@ -1405,10 +1404,8 @@ fn awaitExecSetup(gate: *?[2]posix.fd_t) !void {
     if (length != 1) return error.CapabilityPolicyUnavailable;
     switch (payload[0]) {
         @intFromEnum(ExecSetupStatus.ready) => return,
-        @intFromEnum(ExecSetupStatus.namespace_failed) =>
-        return error.NamespaceIsolationUnavailable,
-        @intFromEnum(ExecSetupStatus.policy_failed) =>
-        return error.CapabilityPolicyUnavailable,
+        @intFromEnum(ExecSetupStatus.namespace_failed) => return error.NamespaceIsolationUnavailable,
+        @intFromEnum(ExecSetupStatus.policy_failed) => return error.CapabilityPolicyUnavailable,
         else => return error.CapabilityPolicyUnavailable,
     }
 }
@@ -1685,8 +1682,8 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
     const ruleset_fd_raw = c.syscall(
         c.SYS_landlock_create_ruleset,
         &ruleset_attr,
-        @sizeOf(c.struct_landlock_ruleset_attr),
-        0,
+        @as(usize, @sizeOf(c.struct_landlock_ruleset_attr)),
+        @as(c_uint, 0),
     );
     if (ruleset_fd_raw < 0) return error.LandlockUnavailable;
     const ruleset_fd: c_int = @intCast(ruleset_fd_raw);
@@ -1705,8 +1702,10 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
         if (executable_fd < 0) return error.InvalidExecutable;
         defer _ = c.close(executable_fd);
 
-        var stat: c.struct_stat = undefined;
-        if (c.fstat(executable_fd, &stat) != 0 or stat.st_nlink != 1) {
+        var stat: std.os.linux.Statx = undefined;
+        if (std.c.statx(executable_fd, "", std.os.linux.AT.EMPTY_PATH, .{ .NLINK = true }, &stat) != 0 or
+            !stat.mask.NLINK or stat.nlink != 1)
+        {
             return error.AliasedExecutable;
         }
 
@@ -1739,7 +1738,7 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
             ruleset_fd,
             c.LANDLOCK_RULE_PATH_BENEATH,
             &path_attr,
-            0,
+            @as(c_uint, 0),
         ) < 0) return error.LandlockRuleFailed;
     }
 
@@ -1764,14 +1763,14 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
             ruleset_fd,
             c.LANDLOCK_RULE_PATH_BENEATH,
             &path_attr,
-            0,
+            @as(c_uint, 0),
         ) < 0) return error.LandlockRuleFailed;
     }
 
-    if (c.prctl(c.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+    if (c.prctl(c.PR_SET_NO_NEW_PRIVS, @as(c_ulong, 1), @as(c_ulong, 0), @as(c_ulong, 0), @as(c_ulong, 0)) != 0) {
         return error.NoNewPrivilegesFailed;
     }
-    if (c.syscall(c.SYS_landlock_restrict_self, ruleset_fd, 0) < 0) {
+    if (c.syscall(c.SYS_landlock_restrict_self, ruleset_fd, @as(c_uint, 0)) < 0) {
         return error.LandlockRestrictFailed;
     }
 }
