@@ -6,6 +6,8 @@ All notable changes to Gondolin are documented here.
 
 ## 0.12.1-adaptivesandbox.1
 
+- Fix explicit Zig 0.16 standard-library options types so guest release builds compile.
+
 - Experimental QEMU-only fork prerelease distributed as GitHub assets; npm publishing is disabled. This release does not claim AdaptiveSandbox qualification.
 
 - Add the versioned one-shot QEMU Capability Invocation API, conformance evidence, and AdaptiveSandbox compatibility metadata. #1

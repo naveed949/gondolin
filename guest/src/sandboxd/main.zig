@@ -19,7 +19,7 @@ const c = @cImport({
 });
 
 const log = std.log.scoped(.sandboxd);
-pub const std_options = .{
+pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
