@@ -1473,3 +1473,63 @@ test("fs rpc service.close closes all open handles", async () => {
   const after = await send(service, "release", { fh });
   assert.equal(after.p.err, ERRNO.EBADF);
 });
+
+test("fs rpc non-atomic truncation stays visible to an already-open writer", async () => {
+  const base = new MemoryProvider();
+  const initial = await base.open("/output.txt", "w", 0o600);
+  await initial.writeFile("writer-before\n");
+  await initial.close();
+  const service = new FsRpcService(base);
+  try {
+    const lookup = await send(service, "lookup", {
+      parent_ino: 1,
+      name: "output.txt",
+    });
+    assert.equal(lookup.p.err, 0);
+    const ino = (lookup.p.res?.entry as { ino: number }).ino;
+    // Linux can issue OPEN followed by SETATTR when atomic O_TRUNC is absent.
+    const opened = await send(service, "open", {
+      ino,
+      flags: LINUX_OPEN_FLAGS.O_WRONLY,
+    });
+    assert.equal(opened.p.err, 0);
+    const fh = opened.p.res?.fh as number;
+    const truncated = await send(service, "truncate", { ino, size: 0 });
+    assert.equal(truncated.p.err, 0);
+    const written = await send(service, "write", {
+      fh,
+      offset: 0,
+      data: Buffer.from("writer-data"),
+    });
+    assert.equal(written.p.err, 0);
+    assert.equal(base.statSync("/output.txt").size, 11);
+    const contents = await base.open("/output.txt", "r");
+    assert.equal((await contents.readFile()).toString(), "writer-data");
+    await contents.close();
+  } finally {
+    await service.close();
+  }
+});
+
+test("memory handles share inode content across writes and truncations without following replaced paths", async () => {
+  const provider = new MemoryProvider();
+  const first = provider.openSync("/shared", "w+");
+  first.writeFileSync("original");
+  const second = provider.openSync("/shared", "r+");
+  second.truncateSync(2);
+  assert.equal(first.statSync().size, 2);
+  assert.equal(first.readFileSync().toString(), "or");
+  first.writeSync(Buffer.from("new"), 0, 3, 0);
+  assert.equal(second.statSync().size, 3);
+  assert.equal(second.readFileSync().toString(), "new");
+  provider.renameSync("/shared", "/renamed");
+  provider.unlinkSync("/renamed");
+  const replacement = provider.openSync("/shared", "w+");
+  replacement.writeFileSync("replacement");
+  first.truncateSync(1);
+  assert.equal(second.readFileSync().toString(), "n");
+  assert.equal(replacement.readFileSync().toString(), "replacement");
+  first.closeSync();
+  second.closeSync();
+  replacement.closeSync();
+});

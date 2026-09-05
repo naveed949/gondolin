@@ -24,6 +24,7 @@ import {
   type ExactWriterInvocationRequest,
   type CapabilityNetworkRule,
   type CapabilityCredentialProjection,
+  type CapabilityInvocationResult,
 } from "../src/index.ts";
 import { __test as capabilityTest } from "../src/capability-invocation.ts";
 import { shouldSkipVmTests } from "./helpers/vm-fixture.ts";
@@ -508,6 +509,24 @@ test(
   },
 );
 
+function networkFailureDetails(result: CapabilityInvocationResult): string {
+  return JSON.stringify({
+    outcome: result.outcome,
+    error: result.error,
+    stderr: result.stderr,
+    attempted: result.evidence.attempted.filter(
+      (effect) => effect.domain === "network",
+    ),
+    denied: result.evidence.denied.filter(
+      (effect) => effect.domain === "network",
+    ),
+    observed: result.evidence.observed.filter(
+      (effect) => effect.domain === "network",
+    ),
+    processEvents: result.evidence.processEvents,
+  });
+}
+
 test(
   "public seam scopes HTTP redirects, resolution, connections, and teardown to one invocation",
   { skip: shouldSkipVmTests(), timeout: 120_000 },
@@ -558,6 +577,7 @@ test(
             ...HTTP_TLS_EGRESS_GUARANTEES,
           ],
         }),
+        { console: "stdio" },
       );
       const result = await context.invoke({
         ...request({ invocationId: "reader-http-redirect" }),
@@ -576,11 +596,7 @@ test(
         requiredGuarantees: [...HTTP_TLS_EGRESS_GUARANTEES],
       });
 
-      assert.equal(
-        result.outcome,
-        "success",
-        `${result.error ?? ""}\n${result.stderr}`,
-      );
+      assert.equal(result.outcome, "success", networkFailureDetails(result));
       assert.equal(result.stdout, "GET network-ok\n");
       const networkEffects = result.evidence.attempted.filter(
         (effect) => effect.domain === "network",
@@ -700,7 +716,7 @@ test(
             ...DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
           ],
         }),
-        { credentialStore: store },
+        { credentialStore: store, console: "stdio" },
       );
       const credentialRequest = (
         invocationId: string,
@@ -736,11 +752,7 @@ test(
           `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/echo`,
         ),
       );
-      assert.equal(
-        first.outcome,
-        "success",
-        `${first.error ?? ""}\n${first.stderr}`,
-      );
+      assert.equal(first.outcome, "success", networkFailureDetails(first));
       assert.equal(first.stdout, "[REDACTED_CREDENTIAL]\n");
       assert.equal(received.at(-1)?.credential, "credential-v1");
       assert.ok(

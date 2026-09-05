@@ -302,7 +302,8 @@ class MemoryFileHandle extends VirtualFileHandle {
     if (this.#entry?.isDynamic && this.#entry.isDynamic()) {
       return this.#entry.getContentSync();
     }
-    return this.#content;
+    // XXX(patch): Open handles share the inode's current buffer, not an open-time snapshot
+    return this._rawContent;
   }
 
   /**
@@ -323,7 +324,8 @@ class MemoryFileHandle extends VirtualFileHandle {
    * @returns {Buffer}
    */
   get _rawContent() {
-    return this.#content;
+    // XXX(patch): Retain inode identity across rename/unlink while observing other handles
+    return this.#entry?.content ?? this.#content;
   }
 
   /**
@@ -380,6 +382,9 @@ class MemoryFileHandle extends VirtualFileHandle {
    */
   writeSync(buffer, offset, length, position) {
     this._checkClosed();
+
+    // XXX(patch): A path truncate or another handle may have replaced the inode buffer
+    this.#content = this._rawContent;
 
     const writePos = position !== null && position !== undefined ? position : this.position;
     const data = buffer.subarray(offset, offset + length);
@@ -464,6 +469,9 @@ class MemoryFileHandle extends VirtualFileHandle {
   writeFileSync(data, options) {
     this._checkClosed();
 
+    // XXX(patch): Append against the shared inode latest content
+    this.#content = this._rawContent;
+
     const buffer = typeof data === 'string' ? Buffer.from(data, options?.encoding) : data;
 
     // In append mode, append to existing content
@@ -503,7 +511,8 @@ class MemoryFileHandle extends VirtualFileHandle {
   statSync(options) {
     this._checkClosed();
     if (this.#getStats) {
-      return this.#getStats(this.#content.length);
+      // XXX(patch): Descriptor stats reflect changes made through any handle
+      return this.#getStats(this._rawContent.length);
     }
     throw new ERR_INVALID_STATE('stats not available');
   }
@@ -523,6 +532,9 @@ class MemoryFileHandle extends VirtualFileHandle {
    */
   truncateSync(len = 0) {
     this._checkClosed();
+
+    // XXX(patch): Preserve bytes from the shared inode, not a stale descriptor buffer
+    this.#content = this._rawContent;
 
     if (len < this.#content.length) {
       this.#content = this.#content.subarray(0, len);
