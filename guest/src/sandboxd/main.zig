@@ -3,9 +3,12 @@ const sandboxd = @import("sandboxd");
 const protocol = sandboxd.protocol;
 const posix = sandboxd.posix;
 const file_requests = @import("file_requests.zig");
+const exec_guard = @import("exec_guard.zig");
+const payload_privileges = @import("payload_privileges.zig");
 const c = @cImport({
     @cDefine("_GNU_SOURCE", "1");
     @cInclude("fcntl.h");
+    @cInclude("elf.h");
     @cInclude("limits.h");
     @cInclude("linux/landlock.h");
     @cInclude("pty.h");
@@ -28,8 +31,15 @@ pub const std_options: std.Options = .{
 pub export var descendant_denial_feature_marker: [43]u8 =
     "gondolin-feature:exec.descendants-denied/v1".*;
 
+const exact_path_marker = "gondolin-feature:exec.exact-path-lsm/v1";
+pub export var exact_path_feature_marker: [exact_path_marker.len]u8 = exact_path_marker.*;
+const payload_marker = "gondolin-feature:exec.payload-confinement/v1";
+pub export var payload_feature_marker: [payload_marker.len]u8 = payload_marker.*;
+
 test {
     _ = file_requests;
+    _ = exec_guard;
+    _ = payload_privileges;
 }
 
 fn syncIo() std.Io {
@@ -748,7 +758,7 @@ fn runExecSession(session: *ExecSession) !void {
     const use_pty = req.pty;
     const wants_stdin = req.stdin or use_pty;
 
-    var resource_group = if (req.resource_limits != null or req.deny_descendants)
+    var resource_group = if (req.resource_limits != null or req.deny_descendants or req.allowed_executables.len > 0)
         try ResourceGroup.create(
             arena_alloc,
             req.id,
@@ -760,6 +770,22 @@ fn runExecSession(session: *ExecSession) !void {
     var resource_usage: ?protocol.ExecResourceUsage = null;
     defer if (resource_group) |*group| {
         if (resource_usage == null) resource_usage = group.settle();
+    };
+
+    var guard: ?exec_guard.Guard = if (req.allowed_executables.len > 0)
+        exec_guard.install(arena_alloc, resource_group.?.path, req.allowed_executables) catch |err| {
+            log.err("exact executable guard installation failed: {s}", .{@errorName(err)});
+            return error.CapabilityPolicyUnavailable;
+        }
+    else
+        null;
+    defer if (guard) |*installed| {
+        if (resource_usage == null) {
+            if (resource_group) |*group| resource_usage = group.settle();
+        }
+        // A pinned guard survives daemon failure and is removed only after the
+        // cgroup has been removed, proving that no payload remains in it.
+        if (resource_usage != null and resource_usage.?.resource_group_removed) installed.close();
     };
 
     var start_gate: ?[2]posix.fd_t = if (resource_group != null)
@@ -811,14 +837,21 @@ fn runExecSession(session: *ExecSession) !void {
                 reportExecSetup(setup_gate, .policy_failed);
                 posix.exit(126);
             };
+            if (req.allowed_executables.len > 0) {
+                confinePayload() catch {
+                    reportExecSetup(setup_gate, .policy_failed);
+                    posix.exit(126);
+                };
+            }
             reportExecSetup(setup_gate, .ready);
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
             }
 
-            posix.execvpeZ(argv[0].?, argv, envp) catch {
-                const msg = "exec failed\n";
-                _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+            posix.execvpeZ(argv[0].?, argv, envp) catch |err| {
+                _ = posix.write(posix.STDERR_FILENO, "exec failed: ") catch {};
+                _ = posix.write(posix.STDERR_FILENO, @errorName(err)) catch {};
+                _ = posix.write(posix.STDERR_FILENO, "\n") catch {};
                 posix.exit(127);
             };
         }
@@ -895,15 +928,22 @@ fn runExecSession(session: *ExecSession) !void {
                 reportExecSetup(setup_gate, .policy_failed);
                 posix.exit(126);
             };
+            if (req.allowed_executables.len > 0) {
+                confinePayload() catch {
+                    reportExecSetup(setup_gate, .policy_failed);
+                    posix.exit(126);
+                };
+            }
             reportExecSetup(setup_gate, .ready);
 
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
             }
 
-            posix.execvpeZ(argv[0].?, argv, envp) catch {
-                const msg = "exec failed\n";
-                _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+            posix.execvpeZ(argv[0].?, argv, envp) catch |err| {
+                _ = posix.write(posix.STDERR_FILENO, "exec failed: ") catch {};
+                _ = posix.write(posix.STDERR_FILENO, @errorName(err)) catch {};
+                _ = posix.write(posix.STDERR_FILENO, "\n") catch {};
                 posix.exit(127);
             };
         }
@@ -1386,6 +1426,15 @@ const ExecSetupStatus = enum(u8) {
     policy_failed = 3,
 };
 
+/// Preserve setup reporting until exec while excluding inherited daemon descriptors
+fn confinePayload() !void {
+    const close_range_cloexec: c_uint = 4;
+    if (c.syscall(c.SYS_close_range, @as(c_uint, 3), @as(c_uint, std.math.maxInt(c_uint)), close_range_cloexec) != 0) {
+        return error.PayloadDescriptorConfinementUnavailable;
+    }
+    try payload_privileges.drop();
+}
+
 fn reportExecSetup(gate: ?[2]posix.fd_t, status: ExecSetupStatus) void {
     const fds = gate orelse return;
     posix.close(fds[0]);
@@ -1464,7 +1513,7 @@ const ResourceGroup = struct {
             const memory_max = try std.fmt.bufPrint(&path_buf, "{d}", .{configured.memory_bytes});
             try writeGroupControl(group_path, "memory.max", memory_max);
         }
-        const pids_limit: u32 = if (deny_descendants) 1 else limits.?.pids;
+        const pids_limit: u32 = if (deny_descendants) 1 else if (limits) |configured| configured.pids else 1024;
         const pids_max = try std.fmt.bufPrint(&path_buf, "{d}", .{pids_limit});
         try writeGroupControl(group_path, "pids.max", pids_max);
 
@@ -1638,7 +1687,7 @@ fn applyNamespaceIsolation(isolate_ipc: bool, isolate_devices: bool) !void {
     if (c.mount(null, "/", null, c.MS_REC | c.MS_PRIVATE, null) != 0) {
         return error.NamespaceIsolationUnavailable;
     }
-    const isolated_mounts = [_][]const u8{ "/dev", "/run", "/tmp" };
+    const isolated_mounts = [_][]const u8{ "/dev", "/run", "/tmp", "/proc" };
     for (isolated_mounts) |mount_path| {
         const mount_path_z = try std.heap.page_allocator.dupeZ(u8, mount_path);
         defer std.heap.page_allocator.free(mount_path_z);
@@ -1666,6 +1715,7 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
     // every namespace-mutating right as well as writes/truncation so an
     // invocation cannot create unaccounted state in guest tmpfs mounts such as
     // /tmp, /run, /root, or cache directories.
+    ruleset_attr.scoped = c.LANDLOCK_SCOPE_SIGNAL | c.LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET;
     ruleset_attr.handled_access_fs = c.LANDLOCK_ACCESS_FS_EXECUTE |
         c.LANDLOCK_ACCESS_FS_WRITE_FILE |
         c.LANDLOCK_ACCESS_FS_REMOVE_DIR |
@@ -1710,9 +1760,9 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
         }
 
         // Landlock identifies objects by inode, so it cannot distinguish an
-        // admitted file from a symlink alias to the same file.  A private
-        // noexec root plus an exact executable bind mount supplies the path
-        // distinction; Landlock remains the inherited complete-tree policy.
+        // admitted file from a symlink alias to the same file. The cgroup
+        // BPF LSM guard checks the original kernel-owned executable pathname;
+        // these mounts and Landlock additionally enforce immutable inodes.
         if (c.mount(
             executable_z.ptr,
             executable_z.ptr,
@@ -1729,6 +1779,10 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
             c.MS_BIND | c.MS_REMOUNT | c.MS_RDONLY | c.MS_NOSUID | c.MS_NODEV,
             null,
         ) != 0) return error.ExecutableMountPolicyUnavailable;
+
+        // ELF interpreters require EXECUTE too. The installed BPF LSM checks
+        // bprm->filename, so this cannot authorize direct loader invocation.
+        try allowElfInterpreter(ruleset_fd, executable_z.ptr);
 
         var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
         path_attr.allowed_access = c.LANDLOCK_ACCESS_FS_EXECUTE;
@@ -1775,6 +1829,52 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
     }
 }
 
+/// Grant only the interpreter recorded in an admitted immutable ELF image.
+/// Original executable paths remain constrained by the cgroup LSM guard.
+fn allowElfInterpreter(ruleset_fd: c_int, executable: [*:0]const u8) !void {
+    const fd = c.open(executable, c.O_RDONLY | c.O_CLOEXEC);
+    if (fd < 0) return error.InvalidExecutable;
+    defer _ = c.close(fd);
+    var header: c.Elf64_Ehdr = undefined;
+    if (c.pread(fd, &header, @sizeOf(c.Elf64_Ehdr), 0) != @sizeOf(c.Elf64_Ehdr)) return error.InvalidExecutable;
+    if (!std.mem.eql(u8, header.e_ident[0..4], "\x7fELF") or
+        header.e_ident[c.EI_CLASS] != c.ELFCLASS64 or header.e_ident[c.EI_DATA] != c.ELFDATA2LSB or
+        header.e_phentsize != @sizeOf(c.Elf64_Phdr) or header.e_phnum > 128 or header.e_phoff > 16 * 1024 * 1024)
+    {
+        return error.InvalidExecutable;
+    }
+    var found = false;
+    for (0..header.e_phnum) |index| {
+        var program: c.Elf64_Phdr = undefined;
+        const offset: i64 = @intCast(header.e_phoff + index * @sizeOf(c.Elf64_Phdr));
+        if (c.pread(fd, &program, @sizeOf(c.Elf64_Phdr), offset) != @sizeOf(c.Elf64_Phdr)) return error.InvalidExecutable;
+        if (program.p_type != c.PT_INTERP) continue;
+        if (found or program.p_filesz < 2 or program.p_filesz > c.PATH_MAX or program.p_offset > 16 * 1024 * 1024) return error.InvalidExecutable;
+        found = true;
+        var interpreter: [c.PATH_MAX]u8 = undefined;
+        const length: usize = @intCast(program.p_filesz);
+        if (c.pread(fd, &interpreter, length, @intCast(program.p_offset)) != length or
+            interpreter[0] != '/' or interpreter[length - 1] != 0 or
+            std.mem.indexOfScalar(u8, interpreter[0 .. length - 1], 0) != null)
+        {
+            return error.InvalidExecutable;
+        }
+        // A runtime interpreter may be a distribution-owned symlink. Its
+        // target stays on the read-only /lib or /usr/lib mount; never /data.
+        var resolved: [c.PATH_MAX]u8 = undefined;
+        const resolved_ptr = c.realpath(@ptrCast(&interpreter), &resolved) orelse return error.InvalidExecutable;
+        const resolved_path = std.mem.span(resolved_ptr);
+        if (!std.mem.startsWith(u8, resolved_path, "/lib/") and !std.mem.startsWith(u8, resolved_path, "/usr/lib/")) return error.InvalidExecutable;
+        const interpreter_fd = c.open(@ptrCast(&interpreter), c.O_PATH | c.O_CLOEXEC);
+        if (interpreter_fd < 0) return error.InvalidExecutable;
+        defer _ = c.close(interpreter_fd);
+        var rule: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
+        rule.allowed_access = c.LANDLOCK_ACCESS_FS_EXECUTE;
+        rule.parent_fd = interpreter_fd;
+        if (c.syscall(c.SYS_landlock_add_rule, ruleset_fd, c.LANDLOCK_RULE_PATH_BENEATH, &rule, @as(c_uint, 0)) < 0) return error.LandlockRuleFailed;
+    }
+}
+
 /// Create a private root view where only later exact-file binds are executable.
 fn makeRootTreeNoExec() !void {
     if (c.unshare(c.CLONE_NEWNS) != 0) {
@@ -1795,7 +1895,7 @@ fn makeRootTreeNoExec() !void {
     ) != 0) return error.ExecutableMountPolicyUnavailable;
 }
 
-/// Restore executable mappings for runtime libraries without granting execve.
+/// Restore executable library mappings; the LSM guard still gates every exec.
 fn makeRuntimeLibrariesExecutable() !void {
     const library_paths = [_][]const u8{ "/lib", "/usr/lib" };
     for (library_paths) |library_path| {

@@ -552,6 +552,17 @@ export function writeAssetManifest(
     guestFeatures.splice(1, 0, DESCENDANT_DENIAL_FEATURE);
   }
 
+  if (sandboxdPath !== undefined) {
+    const binary = fs.readFileSync(sandboxdPath);
+    for (const feature of [
+      "exec.exact-path-lsm/v1",
+      "exec.payload-confinement/v1",
+    ]) {
+      if (binary.includes(Buffer.from(`gondolin-feature:${feature}`)))
+        guestFeatures.push(feature);
+    }
+  }
+
   const manifest: AssetManifest = {
     version: 1,
     buildId: computeAssetBuildId({ checksums, arch: config.arch }),

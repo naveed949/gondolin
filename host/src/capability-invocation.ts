@@ -13,7 +13,7 @@ import {
 } from "./qemu/contracts.ts";
 import { extractIPv4Mapped, parseIPv6Hextets } from "./utils/ip.ts";
 import { HttpRequestBlockedError } from "./http/utils.ts";
-import { MemoryProvider } from "./vfs/node/index.ts";
+import { CapabilitySnapshotProvider } from "./capability-snapshot.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
 import { BoundedOutput } from "./bounded-output.ts";
@@ -103,13 +103,7 @@ export type ExactReaderGuarantee =
   | (typeof DESTINATION_BOUND_CREDENTIAL_GUARANTEES)[number];
 
 export type CapabilityHttpMethod =
-  | "GET"
-  | "HEAD"
-  | "POST"
-  | "PUT"
-  | "PATCH"
-  | "DELETE"
-  | "OPTIONS";
+  "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 export type CapabilityNetworkRule = {
   /** Content-aware transport, where `tls` means HTTP/1.x over TLS */
@@ -450,8 +444,7 @@ export type ExactWriterInvocationRequest = {
 
 export type CapabilityCeiling = ExactReaderCeiling | ExactWriterCeiling;
 export type CapabilityInvocationRequest =
-  | ExactReaderInvocationRequest
-  | ExactWriterInvocationRequest;
+  ExactReaderInvocationRequest | ExactWriterInvocationRequest;
 
 export type CapabilityInvocationRuntimeOptions = {
   /** QEMU executable path */
@@ -477,11 +470,7 @@ export type CapabilityInvocationRuntimeOptions = {
 };
 
 export type CapabilityEffectDecision =
-  | "requested"
-  | "granted"
-  | "attempted"
-  | "denied"
-  | "observed";
+  "requested" | "granted" | "attempted" | "denied" | "observed";
 
 export type CapabilityFilesystemEffect = AuthenticatedEvidenceEvent & {
   /** Capability domain */
@@ -553,12 +542,7 @@ export type CapabilityCredentialEffect = AuthenticatedEvidenceEvent & {
   method?: string;
   /** Non-sensitive denial classification */
   reason?:
-    | "missing"
-    | "expired"
-    | "revoked"
-    | "mismatch"
-    | "stale"
-    | "inactive";
+    "missing" | "expired" | "revoked" | "mismatch" | "stale" | "inactive";
   /** Relationship of this event to enforcement */
   decision: CapabilityEffectDecision;
 };
@@ -1217,7 +1201,7 @@ export class CapabilityInvocationContext {
       );
     }
     const output = new BoundedOutput(request.limits.outputBytes, abort, redact);
-    const provider = new MemoryProvider();
+    const provider = new CapabilitySnapshotProvider();
     const relativeGuestPath = request.capabilities.filesystem.guestPath.slice(
       "/data".length,
     );
@@ -1296,6 +1280,8 @@ export class CapabilityInvocationContext {
         "exec.clear-env/v1",
         "exec.descendants-denied/v1",
         "exec.executable-mount-policy/v1",
+        "exec.exact-path-lsm/v1",
+        "exec.payload-confinement/v1",
         "exec.landlock-allowlist/v1",
       ]) {
         if (!runtime.guestFeatures.includes(feature)) {
@@ -1331,6 +1317,8 @@ export class CapabilityInvocationContext {
           clearEnv: true,
           allowedExecutables: [request.launch.executable],
           denyDescendants: true,
+          isolateIpc: true,
+          isolateDevices: true,
           env: credentialMediator?.environment,
           signal: abort.signal,
           stdin: false,
@@ -1540,7 +1528,7 @@ export class CapabilityInvocationContext {
     const processEvents: CapabilityLifecycleEvent[] = [];
     const abort = new AbortController();
     const output = new BoundedOutput(request.limits.outputBytes, abort);
-    const provider = new MemoryProvider();
+    const provider = new CapabilitySnapshotProvider();
     const relativeGuestPath = request.capabilities.filesystem.guestPath.slice(
       "/data".length,
     );
@@ -1601,6 +1589,8 @@ export class CapabilityInvocationContext {
         "exec.clear-env/v1",
         "exec.descendants-denied/v1",
         "exec.executable-mount-policy/v1",
+        "exec.exact-path-lsm/v1",
+        "exec.payload-confinement/v1",
         "exec.landlock-allowlist/v1",
       ]) {
         if (!runtime.guestFeatures.includes(feature)) {
@@ -1635,7 +1625,10 @@ export class CapabilityInvocationContext {
         {
           clearEnv: true,
           allowedExecutables: [request.launch.executable],
+          allowedWritablePaths: [request.capabilities.filesystem.guestPath],
           denyDescendants: true,
+          isolateIpc: true,
+          isolateDevices: true,
           signal: abort.signal,
           stdin: false,
           pty: false,
@@ -1907,6 +1900,8 @@ type EvidenceHookContext = {
   oldPath?: string;
   newPath?: string;
   flags?: string | number;
+  /** Target length in `bytes` for truncate operations */
+  size?: number;
 };
 
 function createWriterEvidenceHooks(options: {
@@ -1920,6 +1915,8 @@ function createWriterEvidenceHooks(options: {
   denied: CapabilityEffect[];
   observed: CapabilityEffect[];
 }) {
+  let targetCreated = options.targetInitiallyExists;
+  let contentWritten = false;
   const effects = (
     context: EvidenceHookContext,
   ): Array<{
@@ -1938,7 +1935,31 @@ function createWriterEvidenceHooks(options: {
       return [{ operation: "metadata-write", permitted: false }];
     }
     if (/truncate/i.test(context.op)) {
+      // The private inode must exist before Landlock setup. Opening a new empty
+      // output may truncate that placeholder before or after its writable open.
+      if (
+        !options.targetInitiallyExists &&
+        !contentWritten &&
+        context.size === 0
+      ) {
+        return targetCreated
+          ? [{ operation: "lookup", permitted: true }]
+          : [
+              {
+                operation: "create",
+                permitted: options.operations.has("create"),
+              },
+            ];
+      }
       return [
+        ...(!targetCreated
+          ? [
+              {
+                operation: "create" as const,
+                permitted: options.operations.has("create"),
+              },
+            ]
+          : []),
         {
           operation: "truncate",
           permitted: options.operations.has("truncate"),
@@ -1956,13 +1977,16 @@ function createWriterEvidenceHooks(options: {
         permitted: boolean;
       }> = [];
       if (isWritableOpen(context.flags)) {
-        if (!options.targetInitiallyExists && openCreates(context.flags)) {
+        if (!targetCreated) {
           result.push({
             operation: "create",
             permitted: options.operations.has("create"),
           });
         }
-        if (options.targetInitiallyExists && openTruncates(context.flags)) {
+        if (
+          (options.targetInitiallyExists || contentWritten) &&
+          openTruncates(context.flags)
+        ) {
           result.push({
             operation: "truncate",
             permitted: options.operations.has("truncate"),
@@ -2024,6 +2048,9 @@ function createWriterEvidenceHooks(options: {
       if (providerPath !== options.exactPath) return;
       for (const item of effects(context)) {
         if (!item.permitted || item.operation === "lookup") continue;
+        if (item.operation === "create") targetCreated = true;
+        if (item.operation === "write" || item.operation === "truncate")
+          contentWritten = true;
         options.observed.push(
           authenticatedEffect(options.identity, {
             domain: "filesystem",
@@ -2062,12 +2089,6 @@ function isWritableOpen(flags: string | number): boolean {
   return (flags & writeMask) !== 0;
 }
 
-function openCreates(flags: string | number): boolean {
-  return typeof flags === "string"
-    ? /^[wax]/.test(flags)
-    : (flags & fs.constants.O_CREAT) !== 0;
-}
-
 function openTruncates(flags: string | number): boolean {
   return typeof flags === "string"
     ? flags.startsWith("w")
@@ -2075,7 +2096,7 @@ function openTruncates(flags: string | number): boolean {
 }
 
 async function populateSnapshot(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
   contents: Buffer,
 ): Promise<void> {
@@ -2090,20 +2111,20 @@ async function populateSnapshot(
 }
 
 async function populateWriterSnapshot(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
   contents: Buffer | null,
 ): Promise<void> {
   const directory = path.posix.dirname(filePath);
   if (directory !== "/") await provider.mkdir(directory, { recursive: true });
-  if (contents === null) return;
+  // Bind Landlock to this exact private inode, even for a not-yet-created host target.
   const handle = await provider.open(filePath, "w", 0o600);
-  await handle.writeFile(contents);
+  await handle.writeFile(contents ?? Buffer.alloc(0));
   await handle.close();
 }
 
 async function readProviderFile(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
 ): Promise<Buffer> {
   const handle = await provider.open(filePath, "r");
@@ -2978,16 +2999,16 @@ function createInvocationHttpHooks(options: {
             options.identity,
             parsed,
             "request",
-            rule ? "attempted" : "denied",
+            "attempted",
             method,
           )
-        : unknownNetworkEffect(options.identity, "request", "denied", method);
-      options.attempted.push(
-        authenticatedEffect(options.identity, {
-          ...withoutAuthentication(effect),
-          decision: "attempted" as const,
-        }),
-      );
+        : unknownNetworkEffect(
+            options.identity,
+            "request",
+            "attempted",
+            method,
+          );
+      options.attempted.push(effect);
       if (!rule) {
         options.denied.push(
           authenticatedEffect(options.identity, {
@@ -3054,23 +3075,21 @@ function createInvocationHttpHooks(options: {
             options.identity,
             to,
             "redirect",
-            allowed ? "observed" : "denied",
+            "attempted",
             targetMethod,
           )
         : unknownNetworkEffect(
             options.identity,
             "redirect",
-            "denied",
+            "attempted",
             targetMethod,
           );
-      options.attempted.push(
+      options.attempted.push(effect);
+      (allowed ? options.observed : options.denied).push(
         authenticatedEffect(options.identity, {
           ...withoutAuthentication(effect),
-          decision: "attempted" as const,
+          decision: allowed ? "observed" : "denied",
         }),
-      );
-      (allowed ? options.observed : options.denied).push(
-        authenticatedEffect(options.identity, withoutAuthentication(effect)),
       );
       return allowed;
     },
@@ -3913,4 +3932,9 @@ function isMissingCapabilityPolicyError(error: unknown): boolean {
 }
 
 /** @internal */
-export const __test = { redactCredentialBuffer };
+export const __test = {
+  redactCredentialBuffer,
+  createWriterEvidenceHooks,
+  populateWriterSnapshot,
+  createInvocationHttpHooks,
+};

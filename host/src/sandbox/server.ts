@@ -384,7 +384,10 @@ export class SandboxServer extends EventEmitter {
         ? "console=hvc0 root=/dev/vda rootfstype=ext4 rw init=/init"
         : `console=${consoleDevice} initramfs_async=1`;
 
-    const baseAppend = (this.options.append ?? defaultAppend).trim();
+    const baseAppend = (
+      this.options.append ??
+      `${defaultAppend} lsm=landlock,lockdown,yama,loadpin,safesetid,integrity,bpf`
+    ).trim();
     this.baseAppend = baseAppend;
 
     if (this.options.vmm === "krun") {

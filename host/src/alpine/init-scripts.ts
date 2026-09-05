@@ -100,7 +100,9 @@ setup_mitm_ca() {
   done
 
   mitm_ca_cert="/etc/gondolin/mitm/ca.crt"
-  if [ ! -r "\${mitm_ca_cert}" ]; then
+  # A network-disabled VM has no eth0 and no authority to read the MITM mount.
+  # Avoid probing it during boot: denied VFS operations are invocation evidence.
+  if [ ! -d /sys/class/net/eth0 ] || [ ! -r "\${mitm_ca_cert}" ]; then
     if [ -n "\${system_ca_bundle}" ]; then
       export SSL_CERT_FILE="\${system_ca_bundle}"
     fi
@@ -141,6 +143,10 @@ setup_mitm_ca() {
 
 mount -t proc proc /proc || log "[init] mount proc failed"
 mount -t sysfs sysfs /sys || log "[init] mount sysfs failed"
+mkdir -p /sys/fs/cgroup
+mount -t cgroup2 cgroup2 /sys/fs/cgroup || log "[init] mount cgroup2 failed"
+mkdir -p /sys/fs/bpf
+mount -t bpf bpf /sys/fs/bpf || log "[init] mount bpffs failed"
 mount -t devtmpfs devtmpfs /dev || log "[init] mount devtmpfs failed"
 
 mkdir -p /dev/pts /dev/shm /run
@@ -182,6 +188,10 @@ else
   log "[init] /sys/class/virtio-ports missing"
 fi
 
+# A transport can be modular even when virtio device drivers are built in.
+modprobe virtio_pci > /dev/null 2>&1 || true
+modprobe virtio_mmio > /dev/null 2>&1 || true
+
 if modprobe virtio_console > /dev/null 2>&1; then
   log "[init] loaded virtio_console"
 fi
@@ -209,6 +219,9 @@ elif command -v ifconfig > /dev/null 2>&1; then
 else
   log "[init] no network link tool (ip/ifconfig)"
 fi
+
+# LTS kernels provide DHCP packet sockets as a module rather than built in.
+modprobe af_packet > /dev/null 2>&1 || true
 
 if command -v udhcpc > /dev/null 2>&1; then
   UDHCPC_SCRIPT="/usr/share/udhcpc/default.script"
@@ -414,6 +427,9 @@ if [ -r /proc/cmdline ]; then
   done
 fi
 
+# Load available transports before waiting for block and control-port devices.
+modprobe virtio_pci > /dev/null 2>&1 || true
+modprobe virtio_mmio > /dev/null 2>&1 || true
 modprobe virtio_blk > /dev/null 2>&1 || true
 modprobe ext4 > /dev/null 2>&1 || true
 modprobe virtio_console > /dev/null 2>&1 || true
@@ -432,6 +448,9 @@ elif command -v ifconfig > /dev/null 2>&1; then
   ifconfig lo up || true
   ifconfig eth0 up || true
 fi
+
+# LTS kernels provide DHCP packet sockets as a module rather than built in.
+modprobe af_packet > /dev/null 2>&1 || true
 
 if command -v udhcpc > /dev/null 2>&1; then
   UDHCPC_SCRIPT="/usr/share/udhcpc/default.script"
@@ -471,7 +490,15 @@ mkdir -p /newroot/proc /newroot/sys /newroot/dev /newroot/run
 
 if [ -s /etc/resolv.conf ]; then
   mkdir -p /newroot/etc
-  cp /etc/resolv.conf /newroot/etc/resolv.conf 2>/dev/null || true
+  if ! cp /etc/resolv.conf /newroot/etc/resolv.conf 2>/dev/null; then
+    # Read-only roots cannot receive DHCP configuration through a file copy.
+    # Keep the populated initramfs inode mounted across switch_root instead.
+    if [ -f /newroot/etc/resolv.conf ] && [ ! -L /newroot/etc/resolv.conf ]; then
+      mount -o bind /etc/resolv.conf /newroot/etc/resolv.conf || log "[initramfs] resolver bind mount failed"
+    else
+      log "[initramfs] resolver mount target is not a regular file"
+    fi
+  fi
 fi
 
 exec switch_root /newroot /init

@@ -26,6 +26,7 @@ Detection hints:
 Local Gondolin patches:
 - `lib/internal/vfs/providers/real.js` is intentionally kept with Gondolin hardening/extensions (`link`, `statfs`, symlink escape protection, canonical root handling)
 - `lib/internal/vfs/providers/memory.js` adds in-memory hard-link support used by host fs-rpc/FUSE paths
+- `lib/internal/vfs/file_handle.js` shares current memory inode content across handles so path truncation cannot be undone by stale writes; open handles retain inode identity across rename/unlink
 - `lib/internal/vfs/stats.js` preserves provider-reported `nlink` for virtual file stats
 - `lib/internal/vfs/gondolin-shim.js` provides userland shims for `primordials`, `internalBinding`, and `internal/*` requires
 - Every vendored runtime file has a small top-of-file shim block marked with `GONDOLIN_VENDORED_NODE_VFS_PATCH`

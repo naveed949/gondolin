@@ -64,6 +64,27 @@ release registry*. For explicit development identity use
 extracted image directory. Existing local image caches and explicit overrides
 are operator state, not qualification evidence.
 
+## Capability image kernel
+
+Fork CI and coordinated releases use `images/alpine-base.json`, which selects
+Alpine `linux-lts` and matching rootfs modules. The capability executable guard
+requires BPF LSM attachment and function tracing; Alpine 3.23's `linux-virt`
+kernel lacks the required function-tracing support. Guard installation fails
+closed if the selected kernel cannot attach it. Generic builder defaults remain
+`linux-virt` for ordinary VM users.
+
+For a local capability image, build from the repository root with:
+
+```bash
+node host/bin/gondolin.ts build --config images/alpine-base.json --output guest/image/out
+```
+
+The builder extracts `boot/vmlinuz-lts` from the selected package but retains the
+historical output asset name `vmlinuz-virt`. The manifest hashes the actual kernel
+bytes; that filename does not select the kernel flavor. Package download caches
+include the package name, version, and architecture. Use the default fresh build
+work directory when changing kernel packages.
+
 ## Qualification follows implementation
 
 The release manifest deliberately records `adaptiveSandboxQualified: false`.
@@ -82,3 +103,10 @@ specifiers, lockfile, and changelog together. `scripts/package-fork-release.mjs`
 currently admits only `0.12.1-adaptivesandbox.N`; broadening that release series is
 an explicit maintenance change. Public npm distribution would require a separate
 scope migration and trusted publishing configuration; it is intentionally absent.
+
+## Optional documentation hosting
+
+Docs are built and checked on every PR and main push. Forks deploy them to GitHub
+Pages only when the repository variable `DEPLOY_GITHUB_PAGES` is `true`. Before
+setting it, enable Pages in repository settings and select GitHub Actions as the
+build source. This avoids a failed deployment when Pages has not been configured.

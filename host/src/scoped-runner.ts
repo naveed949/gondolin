@@ -15,7 +15,7 @@ import {
   type CapabilityTeardownEvidence,
 } from "./capability-invocation.ts";
 import { VM, type VmRuntimeIdentity } from "./vm/core.ts";
-import { MemoryProvider } from "./vfs/node/index.ts";
+import { CapabilitySnapshotProvider } from "./capability-snapshot.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import type { VfsHookContext } from "./vfs/provider.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
@@ -355,13 +355,7 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
   };
   /** Resource which caused termination */
   exhausted:
-    | "cpu"
-    | "memory"
-    | "pids"
-    | "storage"
-    | "output"
-    | "wall-time"
-    | null;
+    "cpu" | "memory" | "pids" | "storage" | "output" | "wall-time" | null;
   /** Trust source for the reported exhaustion classification */
   exhaustionObservation: "host-observed" | "guest-reported" | null;
   /** Trust source for each usage measurement */
@@ -565,7 +559,7 @@ export class ScopedRunnerInvocationContext {
     const requested = declaredEffects(identity, request, "requested");
     const granted = declaredEffects(identity, request, "granted");
     const processEvents: ScopedRunnerProcessEvent[] = [];
-    const provider = new MemoryProvider();
+    const provider = new CapabilitySnapshotProvider();
     const reads = new Map<string, ResourcePolicy>();
     const writes = new Map<string, ResourcePolicy>();
 
@@ -668,6 +662,8 @@ export class ScopedRunnerInvocationContext {
           ? ["exec.descendants-denied/v1"]
           : []),
         "exec.executable-mount-policy/v1",
+        "exec.exact-path-lsm/v1",
+        "exec.payload-confinement/v1",
         "exec.landlock-allowlist/v1",
         "exec.namespace-isolation/v1",
         "exec.resource-limits/v1",
@@ -1657,7 +1653,7 @@ function declaredEffects(
 }
 
 async function populateFile(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
   contents: Buffer,
   mode: number,
@@ -1670,7 +1666,7 @@ async function populateFile(
 }
 
 async function readProviderFile(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
 ): Promise<Buffer> {
   const handle = await provider.open(filePath, "r");

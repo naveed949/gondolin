@@ -24,9 +24,11 @@ import {
   type ExactWriterInvocationRequest,
   type CapabilityNetworkRule,
   type CapabilityCredentialProjection,
+  type CapabilityInvocationResult,
 } from "../src/index.ts";
 import { __test as capabilityTest } from "../src/capability-invocation.ts";
 import { shouldSkipVmTests } from "./helpers/vm-fixture.ts";
+import { mockCapabilityNetworkDns } from "./helpers/capability-network.ts";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-capability-"));
 const allowedFile = path.join(tempRoot, "allowed.txt");
@@ -159,10 +161,17 @@ test(
   "public seam allows only the exact reader and settles after teardown",
   { skip: shouldSkipVmTests(), timeout: 120_000 },
   async () => {
-    const context = CapabilityInvocationContext.create(ceiling());
+    const context = CapabilityInvocationContext.create(ceiling(), {
+      console: "stdio",
+      startTimeoutMs: 15_000,
+    });
     const allowed = await context.invoke(request());
 
-    assert.equal(allowed.outcome, "success", allowed.error);
+    assert.equal(
+      allowed.outcome,
+      "success",
+      `${allowed.error ?? ""}\n${allowed.stderr}`,
+    );
     assert.equal(allowed.stdout, "capability-data\n");
     assert.equal(allowed.stderr, "");
     assert.match(allowed.evidence.executionId, /^[0-9a-f-]{36}$/);
@@ -186,7 +195,8 @@ test(
       ...request({ invocationId: "reader-malicious" }),
       launch: { executable: "/bin/busybox", args: ["cat", "/data/other.txt"] },
     });
-    assert.equal(malicious.outcome, "command_failed", malicious.error);
+    assert.equal(malicious.outcome, "policy_denied", malicious.error);
+    assert.ok(malicious.exitCode !== null && malicious.exitCode !== 0);
     assert.ok(
       malicious.evidence.denied.some(
         (effect) => effect.guestPath === "/data/other.txt",
@@ -203,10 +213,12 @@ test(
       ...request({ invocationId: "reader-undeclared-descendant" }),
       launch: {
         executable: "/bin/busybox",
-        args: ["sh", "-c", "/usr/bin/env"],
+        args: ["sh", "-c", "exec /usr/bin/env"],
       },
     });
+    // Kernel executable rejection has no host-observed filesystem denial event.
     assert.equal(descendant.outcome, "command_failed", descendant.error);
+    assert.deepEqual(descendant.evidence.denied, []);
     assert.notEqual(descendant.exitCode, 0);
     assert.equal(descendant.stdout, "");
     assert.equal(descendant.evidence.teardown.vmStopped, true);
@@ -218,7 +230,11 @@ test(
       ...request({ invocationId: "reader-clean-environment" }),
       launch: { executable: "/bin/busybox", args: ["env"] },
     });
-    assert.equal(envResult.outcome, "success", envResult.error);
+    assert.equal(
+      envResult.outcome,
+      "success",
+      `${envResult.error ?? ""}\n${envResult.stderr}`,
+    );
     assert.equal(envResult.stdout, "");
 
     const boundedOutput = CapabilityInvocationContext.create(
@@ -267,12 +283,22 @@ test(
     const firstTarget = path.join(tempRoot, "public-writer-first.txt");
     const secondTarget = path.join(tempRoot, "public-writer-second.txt");
     const createdTarget = path.join(tempRoot, "public-writer-created.txt");
+    const emptyTarget = path.join(tempRoot, "public-writer-empty.txt");
+    const unusedTarget = path.join(tempRoot, "public-writer-unused.txt");
+    const failedTarget = path.join(tempRoot, "public-writer-failed.txt");
     const unrelated = path.join(tempRoot, "public-writer-unrelated.txt");
     fs.writeFileSync(firstTarget, "first-before\n");
     fs.writeFileSync(secondTarget, "second-before\n");
     fs.writeFileSync(unrelated, "unrelated-before\n");
     const context = CapabilityInvocationContext.create(
-      writerCeiling([firstTarget, secondTarget, createdTarget]),
+      writerCeiling([
+        firstTarget,
+        secondTarget,
+        createdTarget,
+        emptyTarget,
+        unusedTarget,
+        failedTarget,
+      ]),
     );
 
     const first = await context.invoke(writerRequest(firstTarget));
@@ -290,7 +316,11 @@ test(
       }),
     );
 
-    assert.equal(first.outcome, "success", first.error);
+    assert.equal(
+      first.outcome,
+      "success",
+      `${first.error ?? ""}\n${first.stderr}`,
+    );
     assert.equal(fs.readFileSync(firstTarget, "utf8"), "writer-data");
     assert.equal(fs.readFileSync(secondTarget, "utf8"), "second-data");
     assert.equal(fs.readFileSync(unrelated, "utf8"), "unrelated-before\n");
@@ -341,11 +371,64 @@ test(
         },
       }),
     );
-    assert.equal(created.outcome, "success", created.error);
+    assert.equal(
+      created.outcome,
+      "success",
+      `${created.error ?? ""}\n${created.stderr}`,
+    );
     assert.equal(fs.readFileSync(createdTarget, "utf8"), "created-data");
     assert.ok(
       created.evidence.observed.some((effect) => effect.operation === "create"),
     );
+
+    await assert.rejects(
+      context.invoke(
+        writerRequest(unusedTarget, {
+          invocationId: "writer-missing-create-authority",
+        }),
+      ),
+      (error: unknown) =>
+        error instanceof CapabilityAdmissionError &&
+        /requires create authority/.test(error.message),
+    );
+    assert.equal(fs.existsSync(unusedTarget), false);
+
+    for (const [target, invocationId, command, expected] of [
+      [emptyTarget, "writer-create-empty", ": > /data/output.txt", "success"],
+      [unusedTarget, "writer-unused-placeholder", "true", "success"],
+      [failedTarget, "writer-failed-placeholder", "false", "command_failed"],
+    ] as const) {
+      const createOnly = await context.invoke(
+        writerRequest(target, {
+          invocationId,
+          capabilities: {
+            ...writerRequest(target).capabilities,
+            filesystem: {
+              ...writerRequest(target).capabilities.filesystem,
+              operations: ["create"],
+            },
+          },
+          launch: { executable: "/bin/busybox", args: ["sh", "-c", command] },
+        }),
+      );
+      assert.equal(
+        createOnly.outcome,
+        expected,
+        `${createOnly.error ?? ""}\n${createOnly.stderr}`,
+      );
+      assert.equal(createOnly.evidence.teardown.vmStopped, true);
+      assert.deepEqual(createOnly.evidence.denied, []);
+      if (target === emptyTarget) {
+        assert.equal(fs.readFileSync(target, "utf8"), "");
+        assert.deepEqual(
+          createOnly.evidence.observed.map((effect) => effect.operation),
+          ["create"],
+        );
+      } else {
+        assert.equal(fs.existsSync(target), false);
+        assert.deepEqual(createOnly.evidence.observed, []);
+      }
+    }
 
     const deniedRead = await context.invoke(
       writerRequest(firstTarget, {
@@ -359,11 +442,12 @@ test(
         },
         launch: {
           executable: "/bin/busybox",
-          args: ["sh", "-c", "/bin/busybox cat /data/output.txt >/dev/null"],
+          args: ["cat", "/data/output.txt"],
         },
       }),
     );
-    assert.equal(deniedRead.outcome, "command_failed", deniedRead.error);
+    assert.equal(deniedRead.outcome, "policy_denied", deniedRead.error);
+    assert.ok(deniedRead.exitCode !== null && deniedRead.exitCode !== 0);
     assert.ok(
       deniedRead.evidence.denied.some((effect) => effect.operation === "read"),
     );
@@ -381,17 +465,19 @@ test(
         },
         launch: {
           executable: "/bin/busybox",
-          args: [
-            "sh",
-            "-c",
-            "/bin/busybox ln /data/output.txt /data/alias.txt",
-          ],
+          args: ["ln", "/data/output.txt", "/data/alias.txt"],
         },
       }),
     );
-    assert.equal(deniedLink.outcome, "command_failed", deniedLink.error);
+    assert.equal(deniedLink.outcome, "policy_denied", deniedLink.error);
+    assert.ok(deniedLink.exitCode !== null && deniedLink.exitCode !== 0);
     assert.ok(
-      deniedLink.evidence.denied.some((effect) => effect.operation === "link"),
+      // The VFS can reject destination lookup before a link RPC is possible.
+      deniedLink.evidence.denied.some(
+        (effect) =>
+          effect.domain === "filesystem" &&
+          effect.guestPath === "/data/alias.txt",
+      ),
     );
 
     const truncated = await context.invoke(
@@ -410,7 +496,11 @@ test(
         },
       }),
     );
-    assert.equal(truncated.outcome, "success", truncated.error);
+    assert.equal(
+      truncated.outcome,
+      "success",
+      `${truncated.error ?? ""}\n${truncated.stderr}`,
+    );
     assert.equal(fs.readFileSync(firstTarget, "utf8"), "");
     assert.deepEqual(
       truncated.evidence.granted.map((effect) => effect.operation),
@@ -419,16 +509,35 @@ test(
   },
 );
 
+function networkFailureDetails(result: CapabilityInvocationResult): string {
+  return JSON.stringify({
+    outcome: result.outcome,
+    error: result.error,
+    stderr: result.stderr,
+    attempted: result.evidence.attempted.filter(
+      (effect) => effect.domain === "network",
+    ),
+    denied: result.evidence.denied.filter(
+      (effect) => effect.domain === "network",
+    ),
+    observed: result.evidence.observed.filter(
+      (effect) => effect.domain === "network",
+    ),
+    processEvents: result.evidence.processEvents,
+  });
+}
+
 test(
   "public seam scopes HTTP redirects, resolution, connections, and teardown to one invocation",
   { skip: shouldSkipVmTests(), timeout: 120_000 },
-  async () => {
+  async (t) => {
+    mockCapabilityNetworkDns(t);
     const server = http.createServer((incoming, response) => {
       if (incoming.url === "/redirect") {
         const address = server.address();
         assert.ok(address && typeof address === "object");
         response.writeHead(302, {
-          location: `http://127.0.0.1:${address.port}/ok`,
+          location: `http://capability.test:${address.port}/ok`,
         });
         response.end();
         return;
@@ -447,14 +556,14 @@ test(
       const rules = [
         networkRule({
           protocol: "http",
-          destination: "localhost",
+          destination: "capability-alias.test",
           port: address.port,
           redirects: "follow-authorized",
           internalRanges: "allow",
         }),
         networkRule({
           protocol: "http",
-          destination: "127.0.0.1",
+          destination: "capability.test",
           port: address.port,
           internalRanges: "allow",
         }),
@@ -473,7 +582,11 @@ test(
         ...request({ invocationId: "reader-http-redirect" }),
         launch: {
           executable: "/bin/busybox",
-          args: ["wget", "-qO-", `http://localhost:${address.port}/redirect`],
+          args: [
+            "wget",
+            "-qO-",
+            `http://capability-alias.test:${address.port}/redirect`,
+          ],
         },
         capabilities: {
           ...request().capabilities,
@@ -482,7 +595,7 @@ test(
         requiredGuarantees: [...HTTP_TLS_EGRESS_GUARANTEES],
       });
 
-      assert.equal(result.outcome, "success", result.error);
+      assert.equal(result.outcome, "success", networkFailureDetails(result));
       assert.equal(result.stdout, "GET network-ok\n");
       const networkEffects = result.evidence.attempted.filter(
         (effect) => effect.domain === "network",
@@ -519,7 +632,8 @@ test(
 test(
   "public seam binds, rotates, revokes, expires, redacts, and tears down credentials",
   { skip: shouldSkipVmTests(), timeout: 120_000 },
-  async () => {
+  async (t) => {
+    mockCapabilityNetworkDns(t);
     const received: Array<{ path: string; credential: string | undefined }> =
       [];
     const server = http.createServer((incoming, response) => {
@@ -531,7 +645,7 @@ test(
         const address = server.address();
         assert.ok(address && typeof address === "object");
         response.writeHead(302, {
-          location: `http://localhost:${address.port}/redirected`,
+          location: `http://capability-alias.test:${address.port}/redirected`,
         });
         response.end();
         return;
@@ -560,14 +674,14 @@ test(
       const rules = [
         networkRule({
           protocol: "http",
-          destination: "127.0.0.1",
+          destination: "capability.test",
           port: address.port,
           redirects: "follow-authorized",
           internalRanges: "allow",
         }),
         networkRule({
           protocol: "http",
-          destination: "localhost",
+          destination: "capability-alias.test",
           port: address.port,
           internalRanges: "allow",
         }),
@@ -577,7 +691,7 @@ test(
         projection: "API_TOKEN",
         redactionId: "local-api-token",
         protocol: "http",
-        destination: "127.0.0.1",
+        destination: "capability.test",
         port: address.port,
       });
       const store = CapabilityCredentialStore.create({
@@ -585,7 +699,7 @@ test(
           value: "credential-v1",
           redactionId: "local-api-token",
           protocol: "http",
-          destination: "127.0.0.1",
+          destination: "capability.test",
           port: address.port,
           methods: ["GET"],
         },
@@ -626,7 +740,7 @@ test(
       assert.equal(
         placeholderResult.outcome,
         "success",
-        placeholderResult.error,
+        `${placeholderResult.error ?? ""}\n${placeholderResult.stderr}`,
       );
       assert.match(placeholderResult.stdout, /^GONDOLIN_CREDENTIAL_/);
       const stalePlaceholder = placeholderResult.stdout;
@@ -634,10 +748,10 @@ test(
       const first = await context.invoke(
         credentialRequest(
           "credential-use-v1",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/echo`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/echo`,
         ),
       );
-      assert.equal(first.outcome, "success", first.error);
+      assert.equal(first.outcome, "success", networkFailureDetails(first));
       assert.equal(first.stdout, "[REDACTED_CREDENTIAL]\n");
       assert.equal(received.at(-1)?.credential, "credential-v1");
       assert.ok(
@@ -652,10 +766,11 @@ test(
       const stale = await context.invoke(
         credentialRequest(
           "credential-stale-placeholder",
-          `busybox wget -qO- --header=\"X-Api-Token: ${stalePlaceholder}\" http://127.0.0.1:${address.port}/stale`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: ${stalePlaceholder}\" http://capability.test:${address.port}/stale`,
         ),
       );
-      assert.equal(stale.outcome, "command_failed", stale.error);
+      assert.equal(stale.outcome, "policy_denied", stale.error);
+      assert.ok(stale.exitCode !== null && stale.exitCode !== 0);
       assert.ok(
         stale.evidence.denied.some(
           (effect) =>
@@ -667,10 +782,11 @@ test(
       const redirected = await context.invoke(
         credentialRequest(
           "credential-redirect-alias",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/redirect`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/redirect`,
         ),
       );
-      assert.equal(redirected.outcome, "command_failed", redirected.error);
+      assert.equal(redirected.outcome, "policy_denied", redirected.error);
+      assert.ok(redirected.exitCode !== null && redirected.exitCode !== 0);
       assert.ok(
         redirected.evidence.denied.some(
           (effect) =>
@@ -683,17 +799,21 @@ test(
         value: "credential-v2",
         redactionId: "local-api-token",
         protocol: "http",
-        destination: "127.0.0.1",
+        destination: "capability.test",
         port: address.port,
         methods: ["GET"],
       });
       const rotated = await context.invoke(
         credentialRequest(
           "credential-use-v2",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/rotated`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/rotated`,
         ),
       );
-      assert.equal(rotated.outcome, "success", rotated.error);
+      assert.equal(
+        rotated.outcome,
+        "success",
+        `${rotated.error ?? ""}\n${rotated.stderr}`,
+      );
       assert.equal(received.at(-1)?.credential, "credential-v2");
       assert.ok(!JSON.stringify(rotated).includes("credential-v1"));
       assert.ok(!JSON.stringify(rotated).includes("credential-v2"));
@@ -702,10 +822,11 @@ test(
       const revoked = await context.invoke(
         credentialRequest(
           "credential-revoked",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/revoked`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/revoked`,
         ),
       );
-      assert.equal(revoked.outcome, "command_failed", revoked.error);
+      assert.equal(revoked.outcome, "policy_denied", revoked.error);
+      assert.ok(revoked.exitCode !== null && revoked.exitCode !== 0);
       assert.ok(
         revoked.evidence.denied.some(
           (effect) =>
@@ -718,18 +839,19 @@ test(
         value: "credential-expired",
         redactionId: "local-api-token",
         protocol: "http",
-        destination: "127.0.0.1",
+        destination: "capability.test",
         port: address.port,
         methods: ["GET"],
         expiresAt: "2020-01-01T00:00:00Z",
       });
       const expired = await context.invoke(
         credentialRequest(
-          "credential-expired",
-          `busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://127.0.0.1:${address.port}/expired`,
+          "credential-expiry-check",
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/expired`,
         ),
       );
-      assert.equal(expired.outcome, "command_failed", expired.error);
+      assert.equal(expired.outcome, "policy_denied", expired.error);
+      assert.ok(expired.exitCode !== null && expired.exitCode !== 0);
       assert.ok(
         expired.evidence.denied.some(
           (effect) =>

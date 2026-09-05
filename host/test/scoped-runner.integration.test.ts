@@ -221,13 +221,35 @@ test(
       assertSettled(result, null);
     });
 
+    for (const [name, command] of [
+      ["symlink alias", "exec /bin/cat /data/repo/source.ts"],
+      [
+        "direct ELF loader",
+        `exec /lib/ld-musl-${process.arch === "arm64" ? "aarch64" : "x86_64"}.so.1 /usr/bin/env`,
+      ],
+    ]) {
+      await t.test(
+        `${name} cannot bypass the executable allowlist`,
+        async () => {
+          const result = await invoke(
+            `runner-denied-${name.replaceAll(" ", "-")}`,
+            command,
+          );
+          assert.equal(result.outcome, "command_failed", result.error);
+          assert.notEqual(result.exitCode, 0);
+          assert.equal(result.stdout, "");
+          assertSettled(result, null);
+        },
+      );
+    }
+
     await t.test("undeclared descendant executable is denied", async () => {
       const result = await context.invoke(
         request({
           invocationId: "runner-undeclared-descendant",
           launch: {
             executable: "/bin/busybox",
-            args: ["sh", "-c", "/usr/bin/env & wait"],
+            args: ["sh", "-c", '/usr/bin/env & child=$!; wait "$child"'],
             cwd: "/data/repo",
             mode: "direct",
           },
