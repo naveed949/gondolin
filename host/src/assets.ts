@@ -310,6 +310,9 @@ export interface AssetManifest {
     rootfsMode?: RootfsMode;
   };
 
+  /** Versioned guest enforcement features included in the image */
+  guestFeatures?: string[];
+
   /** resolved OCI source metadata captured during rootfs export */
   ociSource?: {
     /** requested OCI image reference from build config */

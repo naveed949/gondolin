@@ -15,13 +15,44 @@ export type OutputChunk = {
   text: string;
 };
 
+/** Resource limits installed by sandboxd before an exec entrypoint starts */
+export type ExecResourceLimits = {
+  /** Complete process-tree CPU time in `ms` */
+  cpuTimeMs: number;
+  /** Complete process-tree memory ceiling in `bytes` */
+  memoryBytes: number;
+  /** Maximum simultaneous entrypoint and descendant process count */
+  pids: number;
+};
+
+/** Guest-controller accounting returned after the resource group is empty */
+export type ExecResourceUsage = {
+  /** Complete process-tree CPU time in `ms` */
+  cpuTimeMs: number;
+  /** Peak complete process-tree memory in `bytes` */
+  memoryPeakBytes: number;
+  /** Peak simultaneous entrypoint and descendant process count */
+  pidsPeak: number;
+  /** Controller which caused termination */
+  exhausted: "cpu" | "memory" | "pids" | null;
+  /** Descendant creation blocked by the process policy */
+  descendantDenied?: boolean;
+  /** Guest resource-group empty-and-removed state */
+  resourceGroupRemoved: boolean;
+};
+
 /**
  * Result of a completed exec command.
  */
 export class ExecResult {
+  /** Exec request identity */
   readonly id: number;
+  /** Guest process exit code */
   readonly exitCode: number;
+  /** Guest process termination signal */
   readonly signal?: number;
+  /** Guest-reported resource-controller accounting */
+  readonly resourceUsage?: ExecResourceUsage;
   private readonly _stdout: Buffer;
   private readonly _stderr: Buffer;
   private readonly _encoding: BufferEncoding;
@@ -33,12 +64,14 @@ export class ExecResult {
     stderr: Buffer,
     signal?: number,
     encoding: BufferEncoding = DEFAULT_ENCODING,
+    resourceUsage?: ExecResourceUsage,
   ) {
     this.id = id;
     this.exitCode = exitCode;
     this._stdout = stdout;
     this._stderr = stderr;
     this.signal = signal;
+    this.resourceUsage = resourceUsage;
     this._encoding = encoding;
   }
 
@@ -107,6 +140,20 @@ export type ExecOptions = {
   encoding?: BufferEncoding;
   /** abort signal */
   signal?: AbortSignal;
+  /** Empty environment selection instead of inherited guest daemon state */
+  clearEnv?: boolean;
+  /** exact absolute executable paths permitted for the entrypoint and descendants */
+  allowedExecutables?: string[];
+  /** exact absolute files permitted for complete-tree writes and truncation */
+  allowedWritablePaths?: string[];
+  /** Additional-process denial within the guest execution group */
+  denyDescendants?: boolean;
+  /** fail-closed guest resource controllers installed before launch */
+  resourceLimits?: ExecResourceLimits;
+  /** isolate the process tree in a private Linux IPC namespace */
+  isolateIpc?: boolean;
+  /** hide guest device nodes and ambient runtime socket directories */
+  isolateDevices?: boolean;
 
   /** stdout handling (default: "buffer") */
   stdout?: ExecOutputMode;
@@ -796,6 +843,7 @@ export function finishExecSession(
   session: ExecSession,
   exitCode: number,
   signal?: number,
+  resourceUsage?: ExecResourceUsage,
 ): void {
   const result = new ExecResult(
     session.id,
@@ -804,6 +852,7 @@ export function finishExecSession(
     Buffer.concat(session.stderrChunks),
     signal,
     session.encoding,
+    resourceUsage,
   );
 
   session.stdoutPipe?.endStream();

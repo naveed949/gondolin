@@ -478,65 +478,109 @@ export class SandboxVfsProvider
   }
 
   async readlink(path: string, options?: object) {
+    await this.runBefore({ op: "readlink", path });
     if (this.backend.readlink) {
-      return this.backend.readlink(path, options);
+      const result = await this.backend.readlink(path, options);
+      await this.runAfter({ op: "readlink", path, result });
+      return result;
     }
-    return super.readlink(path, options);
+    const result = await super.readlink(path, options);
+    await this.runAfter({ op: "readlink", path, result });
+    return result;
   }
 
   readlinkSync(path: string, options?: object) {
+    this.runBeforeSync({ op: "readlink", path });
     if (this.backend.readlinkSync) {
-      return this.backend.readlinkSync(path, options);
+      const result = this.backend.readlinkSync(path, options);
+      this.runAfterSync({ op: "readlink", path, result });
+      return result;
     }
-    return super.readlinkSync(path, options);
+    const result = super.readlinkSync(path, options);
+    this.runAfterSync({ op: "readlink", path, result });
+    return result;
   }
 
   async symlink(target: string, path: string, type?: string) {
     if (this.readonly) {
       throw createErrnoError(ERRNO.EROFS, "symlink", path);
     }
-    if (this.backend.symlink) {
-      return this.backend.symlink(target, path, type);
-    }
-    return super.symlink(target, path, type);
+    await this.runBefore({
+      op: "symlink",
+      path,
+      oldPath: target,
+      newPath: path,
+    });
+    const result = this.backend.symlink
+      ? await this.backend.symlink(target, path, type)
+      : await super.symlink(target, path, type);
+    await this.runAfter({
+      op: "symlink",
+      path,
+      oldPath: target,
+      newPath: path,
+    });
+    return result;
   }
 
   symlinkSync(target: string, path: string, type?: string) {
     if (this.readonly) {
       throw createErrnoError(ERRNO.EROFS, "symlink", path);
     }
-    if (this.backend.symlinkSync) {
-      return this.backend.symlinkSync(target, path, type);
-    }
-    return super.symlinkSync(target, path, type);
+    this.runBeforeSync({ op: "symlink", path, oldPath: target, newPath: path });
+    const result = this.backend.symlinkSync
+      ? this.backend.symlinkSync(target, path, type)
+      : super.symlinkSync(target, path, type);
+    this.runAfterSync({ op: "symlink", path, oldPath: target, newPath: path });
+    return result;
   }
 
   async realpath(path: string, options?: object) {
+    await this.runBefore({ op: "realpath", path });
     if (this.backend.realpath) {
-      return this.backend.realpath(path, options);
+      const result = await this.backend.realpath(path, options);
+      await this.runAfter({ op: "realpath", path, result });
+      return result;
     }
-    return super.realpath(path, options);
+    const result = await super.realpath(path, options);
+    await this.runAfter({ op: "realpath", path, result });
+    return result;
   }
 
   realpathSync(path: string, options?: object) {
+    this.runBeforeSync({ op: "realpath", path });
     if (this.backend.realpathSync) {
-      return this.backend.realpathSync(path, options);
+      const result = this.backend.realpathSync(path, options);
+      this.runAfterSync({ op: "realpath", path, result });
+      return result;
     }
-    return super.realpathSync(path, options);
+    const result = super.realpathSync(path, options);
+    this.runAfterSync({ op: "realpath", path, result });
+    return result;
   }
 
   async access(path: string, mode?: number) {
+    await this.runBefore({ op: "access", path, mode });
     if (this.backend.access) {
-      return this.backend.access(path, mode);
+      const result = await this.backend.access(path, mode);
+      await this.runAfter({ op: "access", path, mode, result });
+      return result;
     }
-    return super.access(path, mode);
+    const result = await super.access(path, mode);
+    await this.runAfter({ op: "access", path, mode, result });
+    return result;
   }
 
   accessSync(path: string, mode?: number) {
+    this.runBeforeSync({ op: "access", path, mode });
     if (this.backend.accessSync) {
-      return this.backend.accessSync(path, mode);
+      const result = this.backend.accessSync(path, mode);
+      this.runAfterSync({ op: "access", path, mode, result });
+      return result;
     }
-    return super.accessSync(path, mode);
+    const result = super.accessSync(path, mode);
+    this.runAfterSync({ op: "access", path, mode, result });
+    return result;
   }
 
   watch(path: string, options?: object) {

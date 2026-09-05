@@ -438,6 +438,13 @@ export async function handleHttpDataWithWriter(
       const headBuf = httpSession.buffer.prefix(headerEnd + 4);
       const head = parseHttpHead(headBuf);
       if (!head) return;
+      if (head.version !== "HTTP/1.0" && head.version !== "HTTP/1.1") {
+        throw new HttpRequestBlockedError(
+          `unsupported http version: ${head.version}`,
+          505,
+          "HTTP Version Not Supported",
+        );
+      }
 
       const bufferedBodyBytes = Math.max(
         0,
@@ -1425,6 +1432,8 @@ export async function fetchHookRequestAndRespond(
           );
         }
 
+        await ensureRedirectAllowed(backend, currentRequest, redirected);
+
         pendingRequest = {
           method: redirected.method,
           url: redirected.url,
@@ -1434,12 +1443,14 @@ export async function fetchHookRequestAndRespond(
         continue;
       }
 
-      pendingRequest = applyRedirectRequest(
+      const redirected = applyRedirectRequest(
         currentRequest,
         response.status,
         currentUrl,
         redirectUrl,
       );
+      await ensureRedirectAllowed(backend, currentRequest, redirected);
+      pendingRequest = redirected;
       continue;
     }
 
@@ -1996,6 +2007,7 @@ export async function resolveHostname(
       family: entry.family,
       port: policy.port,
       protocol: policy.protocol,
+      phase: "resolution",
     } satisfies HttpIpAllowInfo);
     if (allowed) {
       return { address: entry.address, family: entry.family };
@@ -2081,6 +2093,20 @@ async function ensureRequestAllowed(
   const allowed = await backend.options.httpHooks.isRequestAllowed(headOnly);
   if (!allowed) {
     throw new HttpRequestBlockedError("blocked by request policy");
+  }
+}
+
+async function ensureRedirectAllowed(
+  backend: QemuNetworkBackend,
+  source: InternalHttpRequest,
+  target: InternalHttpRequest,
+): Promise<void> {
+  const policy = backend.options.httpHooks?.isRedirectAllowed;
+  if (!policy) return;
+  const sourceHead = internalHttpRequestToWebRequest({ ...source, body: null });
+  const targetHead = internalHttpRequestToWebRequest({ ...target, body: null });
+  if (!(await policy(sourceHead, targetHead))) {
+    throw new HttpRequestBlockedError("redirect blocked by policy");
   }
 }
 

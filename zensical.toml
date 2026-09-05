@@ -57,6 +57,7 @@ nav = [
     {"Design & Internals" = [
         {"Architecture Overview" = "architecture.md"},
         {"Security Design" = "security.md"},
+        {"AdaptiveSandbox Conformance" = "adaptivesandbox-conformance.md"},
         {"Network Stack" = "network.md"},
         {"QEMU Backend" = "qemu.md"},
         {"Limitations" = "limitations.md"},

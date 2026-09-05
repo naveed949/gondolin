@@ -25,6 +25,8 @@
  * +---------+-----------+-------------------+
  * tag = 1 stdout, tag = 2 stderr, id big-endian.
  */
+
+import type { ExecResourceUsage } from "../exec.ts";
 export type ExecCommandMessage = {
   type: "exec";
   /** request id */
@@ -35,6 +37,27 @@ export type ExecCommandMessage = {
   argv?: string[];
   /** environment variables as `KEY=VALUE` */
   env?: string[];
+  /** whether guest daemon environment inheritance is disabled */
+  clear_env?: boolean;
+  /** exact executable paths enforced for the complete process tree */
+  allowed_executables?: string[];
+  /** exact writable files enforced for the complete process tree */
+  allowed_writable_paths?: string[];
+  /** Additional-process denial within the guest execution group */
+  deny_descendants?: boolean;
+  /** resource controllers installed before releasing the exec start gate */
+  resource_limits?: {
+    /** complete process-tree CPU time in `ms` */
+    cpu_time_ms: number;
+    /** complete process-tree memory in `bytes` */
+    memory_bytes: number;
+    /** maximum simultaneous process-tree members */
+    pids: number;
+  };
+  /** private IPC namespace required before process launch */
+  isolate_ipc?: boolean;
+  /** empty device and ambient-socket mounts required before process launch */
+  isolate_devices?: boolean;
   /** working directory */
   cwd?: string;
   /** whether stdin messages will be sent */
@@ -117,6 +140,8 @@ export type ExecResponseMessage = {
   exit_code: number;
   /** termination signal (if any) */
   signal?: number;
+  /** settled guest resource-controller accounting */
+  resource_usage?: ExecResourceUsage;
 };
 
 export type ErrorMessage = {

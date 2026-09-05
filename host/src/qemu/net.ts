@@ -593,6 +593,23 @@ export class QemuNetworkBackend extends EventEmitter {
         onTcpResume: (message) => this.handleTcpResume(message),
       },
       allowTcpFlow: (info) => {
+        const decide = (allowed: boolean): boolean => {
+          try {
+            this.options.httpHooks?.onFlowDecision?.({
+              protocol: info.protocol,
+              destination: info.dstIP,
+              port: info.dstPort,
+              allowed,
+            });
+          } catch (error) {
+            this.emit(
+              "error",
+              error instanceof Error ? error : new Error(String(error)),
+            );
+            return false;
+          }
+          return allowed;
+        };
         if (info.protocol === "tcp") {
           const session = this.tcpSessions.get(info.key);
           const allowed = Boolean(session?.mappedTcp);
@@ -602,13 +619,13 @@ export class QemuNetworkBackend extends EventEmitter {
                 `tcp blocked ${info.srcIP}:${info.srcPort} -> ${info.dstIP}:${info.dstPort} (${info.protocol})`,
               );
             }
-            return false;
+            return decide(false);
           }
 
           if (session) {
             session.protocol = "tcp";
           }
-          return true;
+          return decide(true);
         }
 
         if (info.protocol === "ssh") {
@@ -624,14 +641,14 @@ export class QemuNetworkBackend extends EventEmitter {
                 `tcp blocked ${info.srcIP}:${info.srcPort} -> ${info.dstIP}:${info.dstPort} (${info.protocol})`,
               );
             }
-            return false;
+            return decide(false);
           }
 
           const session = this.tcpSessions.get(info.key);
           if (session) {
             session.protocol = "ssh";
           }
-          return true;
+          return decide(true);
         }
 
         if (info.protocol !== "http" && info.protocol !== "tls") {
@@ -640,7 +657,7 @@ export class QemuNetworkBackend extends EventEmitter {
               `tcp blocked ${info.srcIP}:${info.srcPort} -> ${info.dstIP}:${info.dstPort} (${info.protocol})`,
             );
           }
-          return false;
+          return decide(false);
         }
 
         const session = this.tcpSessions.get(info.key);
@@ -657,7 +674,7 @@ export class QemuNetworkBackend extends EventEmitter {
             };
           }
         }
-        return true;
+        return decide(true);
       },
     });
 
@@ -1274,8 +1291,7 @@ export class QemuNetworkBackend extends EventEmitter {
 
     while (this.tlsContexts.size > maxEntries) {
       const oldestKey = this.tlsContexts.keys().next().value as
-        | string
-        | undefined;
+        string | undefined;
       if (!oldestKey) break;
       this.tlsContexts.delete(oldestKey);
     }

@@ -42,10 +42,43 @@ test("builder: writeAssetManifest includes krun checksums when krun assets exist
     assert.equal(manifest.assets.krunInitrd, KRUN_INITRD_FILENAME);
     assert.ok(manifest.checksums.krunKernel);
     assert.ok(manifest.checksums.krunInitrd);
+    assert.deepEqual(manifest.guestFeatures, [
+      "exec.clear-env/v1",
+      "exec.landlock-allowlist/v1",
+      "exec.executable-mount-policy/v1",
+      "exec.namespace-isolation/v1",
+      "exec.resource-limits/v1",
+    ]);
     assert.equal(
       manifest.buildId,
       computeAssetBuildId({ checksums: manifest.checksums, arch: "x86_64" }),
     );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("builder: descendant denial is bound to the embedded sandboxd", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-manifest-"));
+  const sandboxdPath = path.join(dir, "sandboxd");
+
+  try {
+    fs.writeFileSync(path.join(dir, KERNEL_FILENAME), "kernel");
+    fs.writeFileSync(path.join(dir, INITRAMFS_FILENAME), "initramfs");
+    fs.writeFileSync(path.join(dir, ROOTFS_FILENAME), "rootfs");
+    fs.writeFileSync(
+      sandboxdPath,
+      "binary-gondolin-feature:exec.descendants-denied/v1-binary",
+    );
+
+    const { manifest } = writeAssetManifest(
+      dir,
+      makeConfig(),
+      undefined,
+      sandboxdPath,
+    );
+
+    assert.ok(manifest.guestFeatures.includes("exec.descendants-denied/v1"));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

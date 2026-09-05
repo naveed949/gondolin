@@ -138,6 +138,48 @@ test("virtio-protocol: buildExecRequest drops undefined optional fields", () => 
   });
 });
 
+test("virtio-protocol: buildExecRequest preserves explicit clean environment", () => {
+  const req = buildExecRequest(6, {
+    cmd: "/usr/bin/env",
+    env: [],
+    clear_env: true,
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/usr/bin/env",
+    env: [],
+    clear_env: true,
+  });
+});
+
+test("virtio-protocol: buildExecRequest preserves capability isolation", () => {
+  const req = buildExecRequest(7, {
+    cmd: "/bin/tool",
+    allowed_executables: ["/bin/tool"],
+    isolate_ipc: true,
+    isolate_devices: true,
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/bin/tool",
+    allowed_executables: ["/bin/tool"],
+    isolate_ipc: true,
+    isolate_devices: true,
+  });
+});
+
+test("virtio-protocol: buildExecRequest preserves descendant denial", () => {
+  const req = buildExecRequest(8, {
+    cmd: "/bin/tool",
+    deny_descendants: true,
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/bin/tool",
+    deny_descendants: true,
+  });
+});
+
 test("virtio-protocol: buildStdinData and buildPtyResize shape", () => {
   const stdin = buildStdinData(1, Buffer.from("hi"));
   assert.deepEqual(stdin, {

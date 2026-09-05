@@ -2,12 +2,12 @@
 
 **Local Linux micro-VMs with programmable network and filesystem control.**
 
-AI agents increasingly run generated code without human review.  That code often
+AI agents increasingly run generated code without human review. That code often
 needs network access and credentials, which creates exfiltration risk.
 
 Gondolin runs that code inside a fast local Linux micro-VM (QEMU by default,
 with an optional experimental `krun` backend) while keeping network and
-filesystem access under host-side policy control.  That policy layer can be
+filesystem access under host-side policy control. That policy layer can be
 customized via JavaScript.
 
 ## Quick Example
@@ -131,6 +131,10 @@ For custom kernels/initrds, provide an explicit `sandbox.imagePath` asset object
 
 ## Documentation
 
+- [Capability Invocation API](docs/capability-invocation.md) — versioned,
+  fail-closed one-shot QEMU exact-reader, exact-writer, and scoped-runner profiles
+- [AdaptiveSandbox Conformance](docs/adaptivesandbox-conformance.md) —
+  integrity-pinned qualification process and exact compatibility matrix
 - [Introduction](https://earendil-works.github.io/gondolin/)
 - [CLI](https://earendil-works.github.io/gondolin/cli/)
 - [SDK](https://earendil-works.github.io/gondolin/sdk/)
@@ -148,7 +152,6 @@ For custom kernels/initrds, provide an explicit `sandbox.imagePath` asset object
 - [Guest sandbox](guest/README.md): Zig build and image/initramfs pipeline
 - [`images/`](images): canonical image release build configs (used by image-release workflow)
 - [Examples](host/examples): end-to-end integration examples
-
 
 ## Pi Extension
 
