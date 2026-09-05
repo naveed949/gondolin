@@ -652,7 +652,7 @@ test("vm internals: file helpers short-circuit VFS mounts", async () => {
   });
 
   try {
-    (vm as any).start = async () => {
+    (vm as any).startAutomatically = async () => {
       throw new Error("start should not be called for VFS shortcut");
     };
 
@@ -735,7 +735,7 @@ test("vm internals: file helpers still use VM path for non-VFS files", async () 
   });
 
   try {
-    (vm as any).start = async () => {
+    (vm as any).startAutomatically = async () => {
       throw new Error("start called");
     };
 
@@ -906,6 +906,54 @@ test("vm internals: handleDisconnect rejects pending state waiters and sessions"
     await assert.rejects(waiter, /bye/);
     await assert.rejects(session1.resultPromise, /bye/);
     await assert.rejects(session2.resultPromise, /bye/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("explicit start boots with autoStart disabled but exec does not", async () => {
+  const { vm, cleanup } = makeVm({
+    autoStart: false,
+    vfs: null,
+    rootfs: { mode: "readonly" },
+  });
+  const sent: any[] = [];
+  let onMessage: (data: string, binary: boolean) => void;
+  (vm as any).ensureVmmAvailable = () => {};
+  (vm as any).ensureSessionIpc = async () => {};
+  (vm as any).server = {
+    start: async () => {},
+    connect: (message: typeof onMessage) => {
+      onMessage = message;
+      queueMicrotask(() =>
+        onMessage(JSON.stringify({ type: "status", state: "stopped" }), false),
+      );
+      return {
+        send: (message: any) => {
+          sent.push(message);
+          if (message.type === "boot") {
+            queueMicrotask(() =>
+              onMessage(
+                JSON.stringify({ type: "status", state: "running" }),
+                false,
+              ),
+            );
+          }
+        },
+        close: () => {},
+      };
+    },
+  };
+  try {
+    await assert.rejects(
+      async () => await vm.exec(["/bin/true"]),
+      /sandbox is stopped/,
+    );
+    assert.equal(sent.filter((message) => message.type === "boot").length, 0);
+    await vm.start();
+    assert.equal(sent.filter((message) => message.type === "boot").length, 1);
+    await vm.start();
+    assert.equal(sent.filter((message) => message.type === "boot").length, 1);
   } finally {
     cleanup();
   }

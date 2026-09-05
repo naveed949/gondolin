@@ -82,3 +82,10 @@ specifiers, lockfile, and changelog together. `scripts/package-fork-release.mjs`
 currently admits only `0.12.1-adaptivesandbox.N`; broadening that release series is
 an explicit maintenance change. Public npm distribution would require a separate
 scope migration and trusted publishing configuration; it is intentionally absent.
+
+## Optional documentation hosting
+
+Docs are built and checked on every PR and main push. Forks deploy them to GitHub
+Pages only when the repository variable `DEPLOY_GITHUB_PAGES` is `true`. Before
+setting it, enable Pages in repository settings and select GitHub Actions as the
+build source. This avoids a failed deployment when Pages has not been configured.

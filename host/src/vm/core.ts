@@ -304,8 +304,7 @@ export class VM {
   private vmmChecked = false;
   private debugLog: DebugLogFn | null = null;
   private debugListener:
-    | ((component: DebugComponent, message: string) => void)
-    | null = null;
+    ((component: DebugComponent, message: string) => void) | null = null;
   private sshAccess: SshAccess | null = null;
   private gondolinEtc: ReturnType<typeof createGondolinEtcMount> | null = null;
   private ingressAccess: IngressAccess | null = null;
@@ -584,7 +583,7 @@ export class VM {
         : undefined,
     });
     this.fs = new VmFsController({
-      start: () => this.start(),
+      start: () => this.startAutomatically(),
       exec: (command, fsOptions = {}) => this.exec(command, fsOptions),
       getServer: () => this.server,
       vfs: this.vfs,
@@ -623,7 +622,7 @@ export class VM {
    * If VFS is configured, this also waits for the VFS mount(s) to be ready.
    */
   async start() {
-    return this.startSingleflight.run(() => this.startInternal());
+    return this.startSingleflight.run(() => this.startInternal(true));
   }
 
   /**
@@ -755,7 +754,7 @@ export class VM {
   async enableSsh(options: EnableSshOptions = {}): Promise<SshAccess> {
     if (this.sshAccess) return this.sshAccess;
 
-    await this.start();
+    await this.startAutomatically();
 
     const user = options.user ?? "root";
     const listenHost = options.listenHost ?? "127.0.0.1";
@@ -1075,7 +1074,7 @@ fi
   ): Promise<IngressAccess> {
     if (this.ingressAccess) return this.ingressAccess;
 
-    await this.start();
+    await this.startAutomatically();
 
     if (!this.gondolinEtc) {
       throw new Error(
@@ -1164,7 +1163,7 @@ fi
     stdinSetting: ExecStdin | undefined,
   ) {
     try {
-      await this.start();
+      await this.startAutomatically();
 
       const mergedEnv = mergeEnvInputs(this.defaultEnv, options.env);
 
@@ -1253,7 +1252,11 @@ fi
     throw error;
   }
 
-  private async startInternal() {
+  private async startAutomatically() {
+    return this.startSingleflight.run(() => this.startInternal(false));
+  }
+
+  private async startInternal(explicitStart: boolean) {
     if (this.checkpointed) {
       throw new Error(
         "vm was checkpointed and cannot be restarted; resume the checkpoint instead",
@@ -1275,7 +1278,7 @@ fi
         await this.ensureConnection();
 
         this.ensureStartupGeneration(startupGeneration);
-        await this.ensureRunning();
+        await this.ensureRunning(explicitStart);
 
         this.ensureStartupGeneration(startupGeneration);
         await this.ensureRootfsResized();
@@ -1657,9 +1660,9 @@ fi
     });
   }
 
-  private async ensureRunning() {
+  private async ensureRunning(explicitStart = false) {
     const state = await this.waitForStatus();
-    if (state === "stopped" && !this.autoStart) {
+    if (state === "stopped" && !this.autoStart && !explicitStart) {
       throw new Error("sandbox is stopped");
     }
 
