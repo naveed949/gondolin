@@ -10,6 +10,7 @@ const c = @cImport({
     @cInclude("linux/landlock.h");
     @cInclude("pty.h");
     @cInclude("sched.h");
+    @cInclude("stdlib.h");
     @cInclude("sys/prctl.h");
     @cInclude("sys/mount.h");
     @cInclude("sys/stat.h");
@@ -707,10 +708,8 @@ fn execWorker(session: *ExecSession) void {
             error.ResourceStartGateMissing,
             error.ResourceStartGateClosed,
             => "resource_controller_unavailable",
-            error.NamespaceIsolationUnavailable =>
-            "namespace_isolation_unavailable",
-            error.CapabilityPolicyUnavailable =>
-            "capability_policy_unavailable",
+            error.NamespaceIsolationUnavailable => "namespace_isolation_unavailable",
+            error.CapabilityPolicyUnavailable => "capability_policy_unavailable",
             else => "exec_failed",
         };
         const message: []const u8 = if (std.mem.eql(
@@ -1405,10 +1404,8 @@ fn awaitExecSetup(gate: *?[2]posix.fd_t) !void {
     if (length != 1) return error.CapabilityPolicyUnavailable;
     switch (payload[0]) {
         @intFromEnum(ExecSetupStatus.ready) => return,
-        @intFromEnum(ExecSetupStatus.namespace_failed) =>
-        return error.NamespaceIsolationUnavailable,
-        @intFromEnum(ExecSetupStatus.policy_failed) =>
-        return error.CapabilityPolicyUnavailable,
+        @intFromEnum(ExecSetupStatus.namespace_failed) => return error.NamespaceIsolationUnavailable,
+        @intFromEnum(ExecSetupStatus.policy_failed) => return error.CapabilityPolicyUnavailable,
         else => return error.CapabilityPolicyUnavailable,
     }
 }
@@ -1705,8 +1702,10 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
         if (executable_fd < 0) return error.InvalidExecutable;
         defer _ = c.close(executable_fd);
 
-        var stat: c.struct_stat = undefined;
-        if (c.fstat(executable_fd, &stat) != 0 or stat.st_nlink != 1) {
+        var stat: std.os.linux.Statx = undefined;
+        if (std.c.statx(executable_fd, "", std.os.linux.AT.EMPTY_PATH, .{ .NLINK = true }, &stat) != 0 or
+            !stat.mask.NLINK or stat.nlink != 1)
+        {
             return error.AliasedExecutable;
         }
 
