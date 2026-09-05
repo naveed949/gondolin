@@ -220,6 +220,9 @@ else
   log "[init] no network link tool (ip/ifconfig)"
 fi
 
+# LTS kernels provide DHCP packet sockets as a module rather than built in.
+modprobe af_packet > /dev/null 2>&1 || true
+
 if command -v udhcpc > /dev/null 2>&1; then
   UDHCPC_SCRIPT="/usr/share/udhcpc/default.script"
   if [ ! -x "\${UDHCPC_SCRIPT}" ]; then
@@ -445,6 +448,9 @@ elif command -v ifconfig > /dev/null 2>&1; then
   ifconfig lo up || true
   ifconfig eth0 up || true
 fi
+
+# LTS kernels provide DHCP packet sockets as a module rather than built in.
+modprobe af_packet > /dev/null 2>&1 || true
 
 if command -v udhcpc > /dev/null 2>&1; then
   UDHCPC_SCRIPT="/usr/share/udhcpc/default.script"

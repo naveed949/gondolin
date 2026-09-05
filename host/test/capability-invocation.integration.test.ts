@@ -28,11 +28,7 @@ import {
 } from "../src/index.ts";
 import { __test as capabilityTest } from "../src/capability-invocation.ts";
 import { shouldSkipVmTests } from "./helpers/vm-fixture.ts";
-import {
-  mockCapabilityNetworkDns,
-  enableCapabilityNetworkDebug,
-  resolverProbe,
-} from "./helpers/capability-network.ts";
+import { mockCapabilityNetworkDns } from "./helpers/capability-network.ts";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-capability-"));
 const allowedFile = path.join(tempRoot, "allowed.txt");
@@ -536,7 +532,6 @@ test(
   { skip: shouldSkipVmTests(), timeout: 120_000 },
   async (t) => {
     mockCapabilityNetworkDns(t);
-    enableCapabilityNetworkDebug(t);
     const server = http.createServer((incoming, response) => {
       if (incoming.url === "/redirect") {
         const address = server.address();
@@ -582,16 +577,15 @@ test(
             ...HTTP_TLS_EGRESS_GUARANTEES,
           ],
         }),
-        { console: "stdio" },
       );
       const result = await context.invoke({
         ...request({ invocationId: "reader-http-redirect" }),
         launch: {
           executable: "/bin/busybox",
           args: [
-            "sh",
-            "-c",
-            `${resolverProbe}exec /bin/busybox wget -qO- http://capability-alias.test:${address.port}/redirect`,
+            "wget",
+            "-qO-",
+            `http://capability-alias.test:${address.port}/redirect`,
           ],
         },
         capabilities: {
@@ -640,7 +634,6 @@ test(
   { skip: shouldSkipVmTests(), timeout: 120_000 },
   async (t) => {
     mockCapabilityNetworkDns(t);
-    enableCapabilityNetworkDebug(t);
     const received: Array<{ path: string; credential: string | undefined }> =
       [];
     const server = http.createServer((incoming, response) => {
@@ -722,7 +715,7 @@ test(
             ...DESTINATION_BOUND_CREDENTIAL_GUARANTEES,
           ],
         }),
-        { credentialStore: store, console: "stdio" },
+        { credentialStore: store },
       );
       const credentialRequest = (
         invocationId: string,
@@ -755,7 +748,7 @@ test(
       const first = await context.invoke(
         credentialRequest(
           "credential-use-v1",
-          `${resolverProbe}exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/echo`,
+          `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/echo`,
         ),
       );
       assert.equal(first.outcome, "success", networkFailureDetails(first));

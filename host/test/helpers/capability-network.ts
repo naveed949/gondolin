@@ -28,17 +28,3 @@ export function mockCapabilityNetworkDns(t: TestContext): void {
     });
   }) as typeof dns.lookup);
 }
-
-/** Log guest boot and DNS metadata during the networking integration fixtures. */
-export function enableCapabilityNetworkDebug(t: TestContext): void {
-  const previous = process.env.GONDOLIN_DEBUG;
-  process.env.GONDOLIN_DEBUG = "net,exec,protocol";
-  t.after(() => {
-    if (previous === undefined) delete process.env.GONDOLIN_DEBUG;
-    else process.env.GONDOLIN_DEBUG = previous;
-  });
-}
-
-/** Builtin-only resolver diagnostics preserve the payload process limit. */
-export const resolverProbe =
-  'printf "resolver-start\\n" >&2; while IFS= read -r line || [ -n "$line" ]; do printf "resolver: %s\\n" "$line" >&2; done < /etc/resolv.conf; printf "resolver-end\\n" >&2; ';

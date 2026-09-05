@@ -11,7 +11,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { ROOTFS_INIT_SCRIPT } from "../src/alpine/init-scripts.ts";
+import {
+  ROOTFS_INIT_SCRIPT,
+  INITRAMFS_INIT_SCRIPT,
+} from "../src/alpine/init-scripts.ts";
 
 test("rootfs init uses current uv system certificates environment variable", () => {
   assert.match(ROOTFS_INIT_SCRIPT, /export UV_SYSTEM_CERTS=true/);
@@ -86,3 +89,11 @@ printf '%s\\n' "$SSL_CERT_FILE" "\${NODE_EXTRA_CA_CERTS:-}"
     }
   });
 }
+
+test("both boot stages load packet sockets before the DHCP client", () => {
+  for (const script of [INITRAMFS_INIT_SCRIPT, ROOTFS_INIT_SCRIPT]) {
+    const packet = script.indexOf("modprobe af_packet");
+    const dhcp = script.indexOf("if command -v udhcpc");
+    assert.ok(packet >= 0 && packet < dhcp);
+  }
+});

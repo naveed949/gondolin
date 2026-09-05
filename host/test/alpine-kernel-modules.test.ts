@@ -41,7 +41,10 @@ for (const transport of ["virtio_pci", "virtio_mmio"]) {
       unrelated,
     ])
       f.write(name);
-    f.write("modules.builtin", "kernel/fs/ext4/ext4.ko\n");
+    f.write(
+      "modules.builtin",
+      "kernel/fs/ext4/ext4.ko\nkernel/net/packet/af_packet.ko\n",
+    );
     f.write(
       "modules.dep",
       [
@@ -82,6 +85,7 @@ test("initramfs accepts built-in console and transport without requiring unsuppo
     "modules.builtin",
     [
       "kernel/fs/ext4/ext4.ko",
+      "kernel/net/packet/af_packet.ko",
       "kernel/drivers/block/virtio_blk.ko",
       "kernel/drivers/char/virtio_console.ko",
       "kernel/drivers/virtio/virtio_pci.ko",
@@ -98,6 +102,7 @@ test("initramfs fails early when console or every supported transport is unavail
   const f = fixture(t);
   const builtin = [
     "kernel/fs/ext4/ext4.ko",
+    "kernel/net/packet/af_packet.ko",
     "kernel/drivers/block/virtio_blk.ko",
   ];
   f.write("modules.builtin", builtin.join("\n"));
@@ -112,5 +117,30 @@ test("initramfs fails early when console or every supported transport is unavail
   assert.throws(
     () => syncKernelModules(f.rootfs, f.initramfs, () => {}),
     /No supported virtio transport/,
+  );
+});
+
+test("initramfs includes modular packet sockets needed by DHCP and fails if unavailable", (t) => {
+  const f = fixture(t);
+  f.write(
+    "modules.builtin",
+    [
+      "kernel/fs/ext4/ext4.ko",
+      "kernel/drivers/block/virtio_blk.ko",
+      "kernel/drivers/char/virtio_console.ko",
+      "kernel/drivers/virtio/virtio_pci.ko",
+    ].join("\n"),
+  );
+  assert.throws(
+    () => syncKernelModules(f.rootfs, f.initramfs, () => {}),
+    /Required kernel module "af_packet"/,
+  );
+  const packet = "kernel/net/packet/af_packet.ko.gz";
+  f.write(packet);
+  f.write("modules.dep", `${packet}:\n`);
+  syncKernelModules(f.rootfs, f.initramfs, () => {});
+  assert.equal(
+    fs.readFileSync(path.join(f.destination, packet), "utf8"),
+    packet,
   );
 });

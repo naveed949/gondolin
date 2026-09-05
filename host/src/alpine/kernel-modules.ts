@@ -9,6 +9,7 @@ const REQUIRED_INITRAMFS_MODULES = [
   "virtio_blk",
   "virtio_console",
   "ext4",
+  "af_packet", // DHCP requires packet sockets before the root filesystem is mounted
 ] as const;
 // Transports are not dependencies of virtio device drivers. Copy whichever the
 // kernel supports; x86 PCI and ARM MMIO guests must discover devices before root.
