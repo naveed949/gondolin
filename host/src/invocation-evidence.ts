@@ -1,12 +1,7 @@
-import {
-  createHash,
-  generateKeyPairSync,
-  randomUUID,
-  sign,
-  verify,
-} from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign, verify } from "node:crypto";
 
 import { getAssetVersion } from "./assets.ts";
+import { deepFreeze, sha256, stableJson } from "./canonical-json.ts";
 
 export const CAPABILITY_EVIDENCE_SCHEMA_VERSION =
   "gondolin.capability-evidence/v2" as const;
@@ -63,9 +58,13 @@ export type CapabilityEvidenceVerificationOptions = {
 };
 
 export type CapabilityEvidenceVerification = {
+  /** Complete verification result */
   valid: boolean;
+  /** Verification failure descriptions */
   errors: string[];
+  /** Verified evidence payload digest */
   payloadDigest: string | null;
+  /** Verified runtime and policy qualification identity */
   qualificationId: string | null;
 };
 
@@ -855,38 +854,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    if (typeof value === "number" && !Number.isFinite(value)) {
-      throw new Error("non-finite number is not canonically serializable");
-    }
-    if (value === undefined || typeof value === "function") {
-      throw new Error("value is not canonically serializable");
-    }
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-    .join(",")}}`;
-}
-
-function sha256(value: string | Buffer): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(child);
-    }
-  }
-  return value;
 }
 
 /** @internal */

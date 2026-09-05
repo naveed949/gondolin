@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,6 +29,25 @@ import {
   type AuthenticatedEvidenceEvent,
   type CapabilityEvidenceIntegrity,
 } from "./invocation-evidence.ts";
+import {
+  canonicalHostFile,
+  getHostFileIdentity,
+  readExactHostFile,
+  type CapabilityFilesystemValidation,
+  type HostFileIdentity,
+} from "./capability-filesystem.ts";
+import { deepFreeze, sha256, stableJson } from "./canonical-json.ts";
+import {
+  isProcessAlive,
+  unavailableRuntimeIdentity,
+  uniqueSorted,
+} from "./capability-runtime.ts";
+
+const capabilityFilesystemValidation: CapabilityFilesystemValidation = {
+  invalid,
+  unsupported,
+  nonEmptyString,
+};
 
 export const SCOPED_RUNNER_GUARANTEES = [
   "canonical-request",
@@ -47,10 +65,6 @@ export const SCOPED_RUNNER_GUARANTEES = [
   "disposable-qemu-vm",
   "full-process-tree-termination",
   "host-observed-process-lifecycle",
-  "per-invocation-cpu",
-  "per-invocation-memory",
-  "per-invocation-pids",
-  "per-invocation-storage",
   "completed-teardown",
   ...CAPABILITY_EVIDENCE_GUARANTEES,
 ] as const;
@@ -60,6 +74,7 @@ export type ScopedRunnerGuarantee = (typeof SCOPED_RUNNER_GUARANTEES)[number];
 export type ScopedRunnerCeiling = {
   /** Capability ceiling schema identifier */
   schemaVersion: typeof CAPABILITY_CEILING_SCHEMA_VERSION;
+  /** Scoped runner profile identifier */
   profile: "scoped-runner";
   /** Absolute guest entrypoints permitted by the ceiling */
   allowedExecutables: string[];
@@ -69,6 +84,7 @@ export type ScopedRunnerCeiling = {
   allowShell: boolean;
   /** Absolute guest working directories permitted by the ceiling */
   allowedWorkingDirectories: string[];
+  /** Filesystem authority ceiling */
   filesystem: {
     /** Host repository files available for exact snapshot reads */
     sourcePaths: string[];
@@ -77,10 +93,12 @@ export type ScopedRunnerCeiling = {
     /** Guest paths available for exact ephemeral writes */
     writeGuestPaths: string[];
   };
+  /** Environment authority ceiling */
   environment: {
     /** Environment variable names which an invocation may project */
     allowedNames: string[];
   };
+  /** Resource limit ceiling */
   limits: {
     /** Maximum complete-tree CPU time in `ms` */
     maxCpuTimeMs: number;
@@ -104,7 +122,9 @@ export type ScopedRunnerInvocationRequest = {
   schemaVersion: typeof CAPABILITY_INVOCATION_SCHEMA_VERSION;
   /** Caller-selected replay identity */
   invocationId: string;
+  /** Scoped runner profile identifier */
   profile: "scoped-runner";
+  /** Entrypoint launch description */
   launch: {
     /** Directly invoked absolute executable path */
     executable: string;
@@ -115,15 +135,20 @@ export type ScopedRunnerInvocationRequest = {
     /** Explicit direct or shell launch mode */
     mode: "direct" | "shell";
   };
+  /** Complete invocation authority */
   capabilities: {
+    /** Exact read and ephemeral write authority */
     filesystem: {
+      /** Exact repository snapshot reads */
       reads: Array<{
         /** Exact host repository file */
         sourcePath: string;
         /** Exact guest-visible snapshot path */
         guestPath: string;
+        /** Exact snapshot read operation */
         operations: ["read"];
       }>;
+      /** Exact ephemeral file writes */
       writes: Array<{
         /** Exact guest-visible ephemeral file */
         guestPath: string;
@@ -133,18 +158,25 @@ export type ScopedRunnerInvocationRequest = {
     };
     /** Explicit clean environment projection */
     environment: Record<string, string>;
+    /** Descendant process authority */
     process: {
       /** Additional descendant executable authority is denied or allow-listed */
       descendants: "deny" | "allow-list";
       /** Absolute descendant executables, empty when descendants are denied */
       allowedExecutables: string[];
     };
+    /** Denied network authority */
     network: "none";
+    /** Denied credential authority */
     credentials: "none";
+    /** Denied Git authority */
     git: "none";
+    /** Denied interprocess communication authority */
     ipc: "none";
+    /** Denied device authority */
     devices: "none";
   };
+  /** Invocation resource bounds */
   limits: {
     /** Complete-tree CPU-time bound in `ms` */
     cpuTimeMs: number;
@@ -169,17 +201,22 @@ export type ScopedRunnerInvokeOptions = {
 };
 
 export type ScopedRunnerFilesystemEffect = AuthenticatedEvidenceEvent & {
+  /** Filesystem effect domain */
   domain: "filesystem";
+  /** Filesystem operation classification */
   operation: "read" | "lookup" | "write" | "truncate" | "other";
   /** SHA-256 identity which does not expose a host path */
   resourceId: string;
   /** Guest-visible resource path */
   guestPath: string;
+  /** Policy decision or observation classification */
   decision: "requested" | "granted" | "attempted" | "denied" | "observed";
 };
 
 export type ScopedRunnerProcessEvent = AuthenticatedEvidenceEvent & {
+  /** Process or lifecycle event domain */
   domain: "process" | "lifecycle";
+  /** Process or lifecycle transition kind */
   kind:
     | "start"
     | "policy"
@@ -192,41 +229,69 @@ export type ScopedRunnerProcessEvent = AuthenticatedEvidenceEvent & {
   executableId?: string;
   /** Non-sensitive host observation */
   detail: string;
+  /** Host observation timestamp */
   observedAt: string;
 };
 
 export type ScopedRunnerInvocationEvidence = {
+  /** Evidence schema identifier */
   schemaVersion: typeof CAPABILITY_EVIDENCE_SCHEMA_VERSION;
+  /** Capability request schema identifier */
   capabilitySchemaVersion: typeof CAPABILITY_INVOCATION_SCHEMA_VERSION;
+  /** Gondolin package version */
   gondolinVersion: string;
+  /** Admission decision */
   decision: "admitted";
+  /** Post-admission execution outcome */
   outcome: ScopedRunnerInvocationResult["outcome"];
+  /** Canonical request digest */
   requestDigest: string;
+  /** Immutable ceiling digest */
   ceilingDigest: string;
+  /** Fresh host execution identity */
   executionId: string;
+  /** Disposable VM identity */
   vmId: string;
+  /** Exact runtime identity */
   runtime: VmRuntimeIdentity;
+  /** Exact feature manifest digest */
   featureManifestDigest: string;
+  /** Exact runtime and policy qualification identity */
   qualificationId: string;
+  /** Invocation policy implementation versions */
   policyVersions: {
+    /** Admission policy version */
     admission: "scoped-runner/v1";
+    /** Filesystem policy version */
     filesystem: "exact-ephemeral-vfs/v1";
+    /** Process policy version */
     process: "exact-mount-landlock/v1";
+    /** Resource policy version */
     resources: "qemu-cgroup-vfs/v1";
+    /** Lifecycle policy version */
     lifecycle: "one-shot-qemu/v1";
   };
+  /** Effects expressed by the admitted request */
   requested: ScopedRunnerFilesystemEffect[];
+  /** Effects granted after ceiling intersection */
   granted: ScopedRunnerFilesystemEffect[];
+  /** Host-observed operation attempts */
   attempted: ScopedRunnerFilesystemEffect[];
+  /** Host-denied operation attempts */
   denied: ScopedRunnerFilesystemEffect[];
+  /** Host-observed successful effects */
   observed: ScopedRunnerFilesystemEffect[];
+  /** Authenticated process and lifecycle transitions */
   processEvents: ScopedRunnerProcessEvent[];
   /** SHA-256 digests of final ephemeral write bytes */
   writeDigests: Record<string, string>;
   /** Execution-bound resource limits, accounting, and exhaustion */
   resources: ScopedRunnerResourceAccounting;
+  /** Invocation start timestamp */
   startedAt: string;
+  /** Invocation settlement timestamp */
   settledAt: string;
+  /** Resource and lifecycle termination evidence */
   teardown: CapabilityTeardownEvidence & {
     /** Disposable VM process-tree empty state */
     processTreeEmpty: boolean;
@@ -234,14 +299,17 @@ export type ScopedRunnerInvocationEvidence = {
     transportClosed: boolean;
     /** Ephemeral writable-resource destruction state */
     writableStateDestroyed: boolean;
-    /** Empty guest-cgroup removal state before settlement */
+    /** Host-confirmed resource-controller destruction after VM stop */
     resourceControllersRemoved: boolean;
   };
+  /** SHA-256 binding to the public command result */
   resultDigest: string;
+  /** Host signature over every preceding evidence field */
   integrity: CapabilityEvidenceIntegrity;
 };
 
 export type ScopedRunnerInvocationResult = {
+  /** Post-admission execution outcome */
   outcome:
     | CapabilityInvocationOutcome
     | "policy_denied"
@@ -251,17 +319,26 @@ export type ScopedRunnerInvocationResult = {
     | "memory_exhausted"
     | "pids_exhausted"
     | "storage_exhausted";
+  /** Guest exit code when an exec response was received */
   exitCode: number | null;
+  /** Bounded stdout */
   stdout: string;
+  /** Bounded stderr */
   stderr: string;
+  /** Admitted output-bound overflow state */
   outputTruncated: boolean;
+  /** Execution-bound resource accounting */
   resourceAccounting: ScopedRunnerResourceAccounting;
+  /** Host-authored invocation evidence */
   evidence: ScopedRunnerInvocationEvidence;
+  /** Non-sensitive failure description */
   error?: string;
 };
 
 export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
+  /** Admitted resource limits */
   limits: ScopedRunnerInvocationRequest["limits"];
+  /** Resource usage measurements */
   usage: {
     /** Host-observed QEMU CPU time since invocation dispatch in `ms` */
     cpuTimeMs: number;
@@ -276,23 +353,42 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
     /** Host-observed invocation wall time in `ms` */
     wallTimeMs: number;
   };
+  /** Resource which caused termination */
   exhausted:
-    "cpu" | "memory" | "pids" | "storage" | "output" | "wall-time" | null;
+    | "cpu"
+    | "memory"
+    | "pids"
+    | "storage"
+    | "output"
+    | "wall-time"
+    | null;
+  /** Trust source for the reported exhaustion classification */
+  exhaustionObservation: "host-observed" | "guest-reported" | null;
+  /** Trust source for each usage measurement */
   observations: {
+    /** CPU accounting source */
     cpu: "host-qemu-process";
-    memory: "guest-cgroup-v2";
-    pids: "guest-cgroup-v2";
+    /** Memory accounting source */
+    memory: "guest-reported-cgroup-v2";
+    /** Process accounting source */
+    pids: "guest-reported-cgroup-v2";
+    /** Writable storage accounting source */
     storage: "host-vfs";
+    /** Output accounting source */
     output: "host-exec-channel";
+    /** Wall-time accounting source */
     wallTime: "host-monotonic-clock";
   };
-  /** Sandboxd empty guest-cgroup removal state */
+  /** Supplemental sandboxd report, not host teardown certification */
   guestResourceGroupRemoved: boolean;
 };
 
 export type CanonicalScopedRunnerRequest = {
+  /** Normalized invocation request */
   request: ScopedRunnerInvocationRequest;
+  /** Byte-stable UTF-8 JSON representation */
   canonical: string;
+  /** SHA-256 of the canonical UTF-8 bytes */
   digest: string;
 };
 
@@ -346,7 +442,7 @@ export class ScopedRunnerInvocationContext {
     this.sourceIdentities = new Map(
       ceiling.filesystem.sourcePaths.map((sourcePath) => [
         sourcePath,
-        getHostFileIdentity(sourcePath),
+        getHostFileIdentity(sourcePath, capabilityFilesystemValidation),
       ]),
     );
   }
@@ -476,7 +572,11 @@ export class ScopedRunnerInvocationContext {
     for (const read of request.capabilities.filesystem.reads) {
       const identity = this.sourceIdentities.get(read.sourcePath);
       if (!identity) widening("repository source has no ceiling identity");
-      const contents = readExactHostFile(read.sourcePath, identity!);
+      const contents = readExactHostFile(
+        read.sourcePath,
+        identity!,
+        capabilityFilesystemValidation,
+      );
       const providerPath = toProviderPath(read.guestPath);
       await populateFile(provider, providerPath, contents, 0o400);
       reads.set(providerPath, {
@@ -564,6 +664,9 @@ export class ScopedRunnerInvocationContext {
       runtime = vm.getRuntimeIdentity();
       for (const feature of [
         "exec.clear-env/v1",
+        ...(request.capabilities.process.descendants === "deny"
+          ? ["exec.descendants-denied/v1"]
+          : []),
         "exec.executable-mount-policy/v1",
         "exec.landlock-allowlist/v1",
         "exec.namespace-isolation/v1",
@@ -638,6 +741,7 @@ export class ScopedRunnerInvocationContext {
           env: request.capabilities.environment,
           clearEnv: true,
           allowedExecutables,
+          denyDescendants: request.capabilities.process.descendants === "deny",
           allowedWritablePaths: request.capabilities.filesystem.writes.map(
             (write) => write.guestPath,
           ),
@@ -659,6 +763,15 @@ export class ScopedRunnerInvocationContext {
       commandStopped = true;
       exitCode = result.exitCode;
       guestUsage = result.resourceUsage;
+      if (result.resourceUsage?.descendantDenied === true) {
+        processEvents.push({
+          ...identity.authenticate(vmId),
+          domain: "process",
+          kind: "denial",
+          detail: "guest process policy denied descendant creation",
+          observedAt: new Date().toISOString(),
+        });
+      }
       if ((result.resourceUsage?.pidsPeak ?? 0) > 1) {
         processEvents.push({
           ...identity.authenticate(vmId),
@@ -695,18 +808,20 @@ export class ScopedRunnerInvocationContext {
         observedAt: new Date().toISOString(),
       });
       outcome =
-        resourceOutcome(result.resourceUsage?.exhausted) ??
-        (storage.exhausted
-          ? "storage_exhausted"
-          : output.overflowed
-            ? "output_overflow"
-            : hostCpuExhausted
-              ? "cpu_exhausted"
-              : denied.length > 0
-                ? "policy_denied"
-                : result.exitCode === 0
-                  ? "success"
-                  : "command_failed");
+        result.resourceUsage?.descendantDenied === true
+          ? "policy_denied"
+          : (resourceOutcome(result.resourceUsage?.exhausted) ??
+            (storage.exhausted
+              ? "storage_exhausted"
+              : output.overflowed
+                ? "output_overflow"
+                : hostCpuExhausted
+                  ? "cpu_exhausted"
+                  : denied.length > 0
+                    ? "policy_denied"
+                    : result.exitCode === 0
+                      ? "success"
+                      : "command_failed"));
     } catch (caught) {
       commandStopped = true;
       runnerAliveAtFailure = runnerPid === null || isProcessAlive(runnerPid);
@@ -785,13 +900,17 @@ export class ScopedRunnerInvocationContext {
       Math.ceil(performance.now() - startedMonotonic),
     );
     const exhausted = outcomeToExhausted(outcome);
+    const hostCpuTimeMs = Math.ceil(
+      cpuObserver?.elapsedMs() ?? guestUsage?.cpuTimeMs ?? 0,
+    );
+    const hostCpuConfirmed =
+      hostCpuExhausted ||
+      (cpuObserver !== null && hostCpuTimeMs >= request.limits.cpuTimeMs);
     const resourceAccounting: ScopedRunnerResourceAccounting = {
       ...identity.authenticate(),
       limits: request.limits,
       usage: {
-        cpuTimeMs: Math.ceil(
-          cpuObserver?.elapsedMs() ?? guestUsage?.cpuTimeMs ?? 0,
-        ),
+        cpuTimeMs: hostCpuTimeMs,
         memoryPeakBytes: guestUsage?.memoryPeakBytes ?? 0,
         pidsPeak: guestUsage?.pidsPeak ?? 0,
         writableStorageBytes: storage.usedBytes,
@@ -799,10 +918,15 @@ export class ScopedRunnerInvocationContext {
         wallTimeMs,
       },
       exhausted,
+      exhaustionObservation: exhaustionObservation(
+        exhausted,
+        guestUsage?.exhausted ?? null,
+        hostCpuConfirmed,
+      ),
       observations: {
         cpu: "host-qemu-process",
-        memory: "guest-cgroup-v2",
-        pids: "guest-cgroup-v2",
+        memory: "guest-reported-cgroup-v2",
+        pids: "guest-reported-cgroup-v2",
         storage: "host-vfs",
         output: "host-exec-channel",
         wallTime: "host-monotonic-clock",
@@ -828,8 +952,7 @@ export class ScopedRunnerInvocationContext {
       processTreeEmpty: teardownComplete,
       transportClosed: teardownComplete,
       writableStateDestroyed: teardownComplete,
-      resourceControllersRemoved:
-        teardownComplete && guestUsage?.resourceGroupRemoved === true,
+      resourceControllersRemoved: teardownComplete,
       completedAt: teardownComplete ? settledAt : null,
     };
 
@@ -1055,7 +1178,11 @@ function normalizeCeiling(input: unknown): ScopedRunnerCeiling {
           filesystem.sourcePaths,
           "ceiling.filesystem.sourcePaths",
         ).map((value) =>
-          canonicalHostFile(value, "ceiling.filesystem.sourcePaths"),
+          canonicalHostFile(
+            value,
+            "ceiling.filesystem.sourcePaths",
+            capabilityFilesystemValidation,
+          ),
         ),
       ),
       readGuestPaths: uniqueSorted(
@@ -1215,6 +1342,7 @@ function normalizeRequest(input: unknown): ScopedRunnerInvocationRequest {
       sourcePath: canonicalHostFile(
         value.sourcePath,
         `request.capabilities.filesystem.reads[${index}].sourcePath`,
+        capabilityFilesystemValidation,
       ),
       guestPath: guestDataFile(
         value.guestPath,
@@ -1553,70 +1681,6 @@ async function readProviderFile(
   }
 }
 
-type HostFileIdentity = { dev: bigint; ino: bigint };
-
-function canonicalHostFile(value: unknown, label: string): string {
-  const input = nonEmptyString(value, label);
-  const lexical = path.resolve(input);
-  let stats: fs.Stats;
-  try {
-    stats = fs.lstatSync(lexical);
-  } catch {
-    invalid(`${label} must identify an existing host file`);
-  }
-  if (stats!.isSymbolicLink() || !stats!.isFile())
-    invalid(
-      `${label} must identify a regular file without symlink indirection`,
-    );
-  return fs.realpathSync(lexical);
-}
-
-function getHostFileIdentity(filePath: string): HostFileIdentity {
-  const noFollow = fs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number")
-    unsupported(
-      "host platform cannot open exact files without following links",
-    );
-  let fd: number;
-  try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
-  } catch {
-    invalid(
-      "repository source changed or could not be opened without symlink traversal",
-    );
-  }
-  try {
-    const stats = fs.fstatSync(fd!, { bigint: true });
-    if (!stats.isFile())
-      invalid("repository source is no longer a regular file");
-    return { dev: stats.dev, ino: stats.ino };
-  } finally {
-    fs.closeSync(fd!);
-  }
-}
-
-function readExactHostFile(
-  filePath: string,
-  expected: HostFileIdentity,
-): Buffer {
-  const noFollow = fs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number")
-    unsupported(
-      "host platform cannot open exact files without following links",
-    );
-  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
-  try {
-    const stats = fs.fstatSync(fd, { bigint: true });
-    if (!stats.isFile())
-      invalid("repository source is no longer a regular file");
-    if (stats.dev !== expected.dev || stats.ino !== expected.ino)
-      invalid("repository source identity changed after ceiling creation");
-    return fs.readFileSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 function guestDataFile(value: unknown, label: string): string {
   const result = canonicalGuestPath(value, label);
   if (!result.startsWith("/data/") || result.endsWith("/"))
@@ -1764,33 +1828,6 @@ function widening(message: string): never {
   throw new CapabilityAdmissionError("ceiling_widening", message);
 }
 
-function uniqueSorted<T extends string>(values: T[]): T[] {
-  return [...new Set(values)].sort() as T[];
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-    .join(",")}}`;
-}
-
-function sha256(value: string | Buffer): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const nested of Object.values(value as Record<string, unknown>))
-      deepFreeze(nested);
-    Object.freeze(value);
-  }
-  return value;
-}
-
 function normalizeProviderPath(value: string): string {
   return path.posix.normalize(value.startsWith("/") ? value : `/${value}`);
 }
@@ -1838,15 +1875,6 @@ function withoutAuthentication<T extends AuthenticatedEvidenceEvent>(
   return rest;
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
-
 const MEBIBYTE = 1024 * 1024;
 
 function readLinuxProcessCpuMs(
@@ -1892,23 +1920,25 @@ function outcomeToExhausted(
   return null;
 }
 
+function exhaustionObservation(
+  exhausted: ScopedRunnerResourceAccounting["exhausted"],
+  guestExhausted: import("./exec.ts").ExecResourceUsage["exhausted"],
+  hostCpuConfirmed: boolean,
+): ScopedRunnerResourceAccounting["exhaustionObservation"] {
+  if (exhausted === null) return null;
+  if (
+    exhausted === guestExhausted &&
+    !(exhausted === "cpu" && hostCpuConfirmed)
+  ) {
+    return "guest-reported";
+  }
+  return "host-observed";
+}
+
 function isMissingExecutionIsolationError(error: unknown): boolean {
   return /(resource_controller|namespace_isolation|capability_policy)_unavailable/.test(
     safeError(error),
   );
-}
-
-function unavailableRuntimeIdentity(): VmRuntimeIdentity {
-  return {
-    vmm: "qemu",
-    hostPlatform: process.platform,
-    hostArchitecture: process.arch,
-    guestArchitecture: "unknown",
-    imageDigest: "unavailable",
-    guestKernelDigest: "unavailable",
-    guestControlDigest: "unavailable",
-    guestFeatures: [],
-  };
 }
 
 function safeError(error: unknown): string {
@@ -1920,4 +1950,5 @@ export const __test = {
   WritableStorageBudget,
   resourceOutcome,
   outcomeToExhausted,
+  exhaustionObservation,
 };

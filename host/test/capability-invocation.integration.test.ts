@@ -246,6 +246,17 @@ test(
     });
     assert.equal(timeout.outcome, "timeout", timeout.error);
     assert.equal(timeout.evidence.teardown.vmStopped, true);
+
+    const noDescendants = await context.invoke({
+      ...request({ invocationId: "reader-no-descendants" }),
+      launch: {
+        executable: "/bin/busybox",
+        args: ["sh", "-c", "busybox echo child-ran & wait"],
+      },
+    });
+    assert.notEqual(noDescendants.outcome, "success");
+    assert.doesNotMatch(noDescendants.stdout, /child-ran/);
+    assert.equal(noDescendants.evidence.teardown.vmStopped, true);
   },
 );
 

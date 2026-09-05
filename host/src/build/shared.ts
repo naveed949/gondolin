@@ -27,6 +27,8 @@ const ZIG_TARGETS: Record<Architecture, string> = {
 
 const BUILD_SANDBOX_HELPERS_FROM_SOURCE_ENV =
   "GONDOLIN_BUILD_SANDBOX_HELPERS_FROM_SOURCE";
+const DESCENDANT_DENIAL_FEATURE = "exec.descendants-denied/v1";
+const DESCENDANT_DENIAL_BINARY_MARKER = `gondolin-feature:${DESCENDANT_DENIAL_FEATURE}`;
 
 export const DEFAULT_ROOTFS_PACKAGES = [
   "linux-virt",
@@ -503,6 +505,7 @@ export function writeAssetManifest(
     digest?: string;
     reference?: string;
   },
+  sandboxdPath?: string,
 ): { manifestPath: string; manifest: AssetManifest } {
   const kernelDst = path.join(outputDir, KERNEL_FILENAME);
   const initramfsDst = path.join(outputDir, INITRAMFS_FILENAME);
@@ -533,16 +536,26 @@ export function writeAssetManifest(
     checksums.krunInitrd = computeFileHash(krunInitrdDst);
   }
 
+  const guestFeatures = [
+    "exec.clear-env/v1",
+    "exec.landlock-allowlist/v1",
+    "exec.executable-mount-policy/v1",
+    "exec.namespace-isolation/v1",
+    "exec.resource-limits/v1",
+  ];
+  if (
+    sandboxdPath !== undefined &&
+    fs
+      .readFileSync(sandboxdPath)
+      .includes(Buffer.from(DESCENDANT_DENIAL_BINARY_MARKER))
+  ) {
+    guestFeatures.splice(1, 0, DESCENDANT_DENIAL_FEATURE);
+  }
+
   const manifest: AssetManifest = {
     version: 1,
     buildId: computeAssetBuildId({ checksums, arch: config.arch }),
-    guestFeatures: [
-      "exec.clear-env/v1",
-      "exec.landlock-allowlist/v1",
-      "exec.executable-mount-policy/v1",
-      "exec.namespace-isolation/v1",
-      "exec.resource-limits/v1",
-    ],
+    guestFeatures,
     config,
     buildTime: new Date().toISOString(),
     assets,

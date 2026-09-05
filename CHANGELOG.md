@@ -12,6 +12,7 @@ All notable changes to Gondolin are documented here.
 - Add invocation-bound destination credential projection with trusted host references, live rotation/revocation checks, safe lifecycle evidence, and current/historical value redaction. #7
 - Add concurrent profile isolation fixtures, authenticated execution identities, signed evidence v2, independent verification and teardown probes, exact runtime/policy qualification binding, and adversarial tamper detection. #8
 - Add fail-closed released AdaptiveSandbox conformance pinning, a public-seam qualification adapter, exact compatibility matrix, dishonest-backend report validation, and performance/security reporting. #9
+- Harden capability invocations with explicit descendant denial, atomic exact-writer publication with a documented host replacement contract, and provenance-labelled resource evidence.
 
 ## 0.12.0
 

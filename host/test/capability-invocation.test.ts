@@ -25,6 +25,11 @@ import {
   type CapabilityCredentialProjection,
 } from "../src/index.ts";
 import { __test as capabilityTest } from "../src/capability-invocation.ts";
+import {
+  commitExactWriterTarget,
+  getHostWriterTargetIdentity,
+} from "../src/capability-filesystem.ts";
+import { deepFreeze } from "../src/canonical-json.ts";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-capability-"));
 const allowedFile = path.join(tempRoot, "allowed.txt");
@@ -34,6 +39,50 @@ fs.writeFileSync(otherFile, "other-data\n", { mode: 0o600 });
 
 test.after(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("exact-writer publication cannot mutate a concurrently linked alias", () => {
+  const directory = fs.mkdtempSync(path.join(tempRoot, "writer-race-"));
+  const target = path.join(directory, "target.txt");
+  const alias = path.join(directory, "alias.txt");
+  const before = Buffer.from("before\n");
+  const after = Buffer.from("after\n");
+  fs.writeFileSync(target, before, { mode: 0o600 });
+  fs.chmodSync(target, 0o4600);
+  const expected = getHostWriterTargetIdentity(target);
+
+  const published = commitExactWriterTarget(
+    target,
+    expected,
+    before,
+    after,
+    new Set(["truncate"]),
+    {
+      beforePublish: () => fs.linkSync(target, alias),
+    },
+  );
+
+  assert.deepEqual(fs.readFileSync(target), after);
+  assert.deepEqual(fs.readFileSync(alias), before);
+  assert.equal(fs.statSync(target).mode & 0o7777, 0o4600);
+
+  const final = Buffer.from("final\n");
+  commitExactWriterTarget(
+    target,
+    published,
+    after,
+    final,
+    new Set(["truncate"]),
+  );
+  assert.deepEqual(fs.readFileSync(target), final);
+});
+
+test("deepFreeze recursively freezes a shallow-frozen value", () => {
+  const value = Object.freeze({ nested: { mutable: true } });
+
+  deepFreeze(value);
+
+  assert.equal(Object.isFrozen(value.nested), true);
 });
 
 function ceiling(

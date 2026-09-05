@@ -304,7 +304,8 @@ export class VM {
   private vmmChecked = false;
   private debugLog: DebugLogFn | null = null;
   private debugListener:
-    ((component: DebugComponent, message: string) => void) | null = null;
+    | ((component: DebugComponent, message: string) => void)
+    | null = null;
   private sshAccess: SshAccess | null = null;
   private gondolinEtc: ReturnType<typeof createGondolinEtcMount> | null = null;
   private ingressAccess: IngressAccess | null = null;
@@ -1176,6 +1177,7 @@ fi
         clear_env: options.clearEnv ? true : undefined,
         allowed_executables: options.allowedExecutables,
         allowed_writable_paths: options.allowedWritablePaths,
+        deny_descendants: options.denyDescendants ? true : undefined,
         resource_limits: options.resourceLimits
           ? {
               cpu_time_ms: options.resourceLimits.cpuTimeMs,

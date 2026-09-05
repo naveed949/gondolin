@@ -35,6 +35,8 @@ export type ExecResourceUsage = {
   pidsPeak: number;
   /** Controller which caused termination */
   exhausted: "cpu" | "memory" | "pids" | null;
+  /** Descendant creation blocked by the process policy */
+  descendantDenied?: boolean;
   /** Guest resource-group empty-and-removed state */
   resourceGroupRemoved: boolean;
 };
@@ -43,9 +45,13 @@ export type ExecResourceUsage = {
  * Result of a completed exec command.
  */
 export class ExecResult {
+  /** Exec request identity */
   readonly id: number;
+  /** Guest process exit code */
   readonly exitCode: number;
+  /** Guest process termination signal */
   readonly signal?: number;
+  /** Guest-reported resource-controller accounting */
   readonly resourceUsage?: ExecResourceUsage;
   private readonly _stdout: Buffer;
   private readonly _stderr: Buffer;
@@ -110,7 +116,11 @@ export class ExecResult {
 }
 
 export type ExecOutputMode =
-  "buffer" | "pipe" | "inherit" | "ignore" | NodeJS.WritableStream;
+  | "buffer"
+  | "pipe"
+  | "inherit"
+  | "ignore"
+  | NodeJS.WritableStream;
 
 /**
  * Options for exec.
@@ -136,6 +146,8 @@ export type ExecOptions = {
   allowedExecutables?: string[];
   /** exact absolute files permitted for complete-tree writes and truncation */
   allowedWritablePaths?: string[];
+  /** Additional-process denial within the guest execution group */
+  denyDescendants?: boolean;
   /** fail-closed guest resource controllers installed before launch */
   resourceLimits?: ExecResourceLimits;
   /** isolate the process tree in a private Linux IPC namespace */
@@ -485,7 +497,8 @@ export class ExecProcess
 
   then<TResult1 = ExecResult, TResult2 = never>(
     onfulfilled?:
-      ((value: ExecResult) => TResult1 | PromiseLike<TResult1>) | null,
+      | ((value: ExecResult) => TResult1 | PromiseLike<TResult1>)
+      | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2> {
     return this.session.resultPromise.then(onfulfilled, onrejected);

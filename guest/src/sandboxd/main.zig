@@ -19,6 +19,13 @@ const c = @cImport({
 });
 
 const log = std.log.scoped(.sandboxd);
+pub const std_options = .{
+    .log_level = .info,
+};
+
+/// ReleaseSmall marker inspected by the image manifest builder
+pub export var descendant_denial_feature_marker: [43]u8 =
+    "gondolin-feature:exec.descendants-denied/v1".*;
 
 test {
     _ = file_requests;
@@ -61,6 +68,7 @@ const OwnedExecRequest = struct {
     clear_env: bool,
     allowed_executables: []const []const u8,
     allowed_writable_paths: []const []const u8,
+    deny_descendants: bool,
     resource_limits: ?protocol.ExecResourceLimits,
     isolate_ipc: bool,
     isolate_devices: bool,
@@ -228,6 +236,7 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         .clear_env = req.clear_env,
         .allowed_executables = allowed_executables,
         .allowed_writable_paths = allowed_writable_paths,
+        .deny_descendants = req.deny_descendants,
         .resource_limits = req.resource_limits,
         .isolate_ipc = req.isolate_ipc,
         .isolate_devices = req.isolate_devices,
@@ -277,7 +286,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    log.info("starting", .{});
+    log.info("starting ({s})", .{descendant_denial_feature_marker});
 
     const virtio_fd = try openVirtioPort();
     defer posix.close(virtio_fd);
@@ -740,8 +749,13 @@ fn runExecSession(session: *ExecSession) !void {
     const use_pty = req.pty;
     const wants_stdin = req.stdin or use_pty;
 
-    var resource_group = if (req.resource_limits) |limits|
-        try ResourceGroup.create(arena_alloc, req.id, limits)
+    var resource_group = if (req.resource_limits != null or req.deny_descendants)
+        try ResourceGroup.create(
+            arena_alloc,
+            req.id,
+            req.resource_limits,
+            req.deny_descendants,
+        )
     else
         null;
     var resource_usage: ?protocol.ExecResourceUsage = null;
@@ -1427,38 +1441,55 @@ fn releaseResourceStartGate(
 
 const ResourceGroup = struct {
     path: []const u8,
-    limits: protocol.ExecResourceLimits,
+    limits: ?protocol.ExecResourceLimits,
+    deny_descendants: bool,
     exhausted: ?protocol.ExecResourceExhaustion = null,
+    descendant_denied: bool = false,
 
     fn create(
         allocator: std.mem.Allocator,
         id: u32,
-        limits: protocol.ExecResourceLimits,
+        limits: ?protocol.ExecResourceLimits,
+        deny_descendants: bool,
     ) !ResourceGroup {
         try requireControlFile("/sys/fs/cgroup/cgroup.controllers");
-        try writeControlFile("/sys/fs/cgroup/cgroup.subtree_control", "+memory +pids");
+        try writeControlFile(
+            "/sys/fs/cgroup/cgroup.subtree_control",
+            if (limits != null) "+memory +pids" else "+pids",
+        );
         const group_path = try std.fmt.allocPrint(allocator, "/sys/fs/cgroup/gondolin-exec-{d}", .{id});
         const group_path_z = try allocator.dupeZ(u8, group_path);
         if (c.mkdir(group_path_z.ptr, 0o700) != 0) return error.ResourceControllerUnavailable;
         errdefer _ = c.rmdir(group_path_z.ptr);
 
         var path_buf: [256]u8 = undefined;
-        const memory_max = try std.fmt.bufPrint(&path_buf, "{d}", .{limits.memory_bytes});
-        try writeGroupControl(group_path, "memory.max", memory_max);
-        const pids_max = try std.fmt.bufPrint(&path_buf, "{d}", .{limits.pids});
+        if (limits) |configured| {
+            const memory_max = try std.fmt.bufPrint(&path_buf, "{d}", .{configured.memory_bytes});
+            try writeGroupControl(group_path, "memory.max", memory_max);
+        }
+        const pids_limit: u32 = if (deny_descendants) 1 else limits.?.pids;
+        const pids_max = try std.fmt.bufPrint(&path_buf, "{d}", .{pids_limit});
         try writeGroupControl(group_path, "pids.max", pids_max);
 
         for ([_][]const u8{
             "cgroup.procs",
             "cgroup.kill",
-            "cpu.stat",
-            "memory.events",
-            "memory.peak",
             "pids.events",
             "pids.peak",
         }) |name| try requireGroupControl(group_path, name);
+        if (limits != null) {
+            for ([_][]const u8{
+                "cpu.stat",
+                "memory.events",
+                "memory.peak",
+            }) |name| try requireGroupControl(group_path, name);
+        }
 
-        return .{ .path = group_path, .limits = limits };
+        return .{
+            .path = group_path,
+            .limits = limits,
+            .deny_descendants = deny_descendants,
+        };
     }
 
     fn attach(self: *ResourceGroup, pid: posix.pid_t) !void {
@@ -1469,20 +1500,26 @@ const ResourceGroup = struct {
 
     fn pollExhaustion(self: *ResourceGroup) bool {
         if (self.exhausted != null) return true;
-        const memory_events = readGroupControl(self.path, "memory.events") catch return false;
-        if (controlCounter(memory_events, "oom_kill") > 0 or controlCounter(memory_events, "oom") > 0 or controlCounter(memory_events, "max") > 0) {
-            self.exhausted = .memory;
-            return true;
+        if (self.limits) |limits| {
+            const memory_events = readGroupControl(self.path, "memory.events") catch return false;
+            if (controlCounter(memory_events, "oom_kill") > 0 or controlCounter(memory_events, "oom") > 0 or controlCounter(memory_events, "max") > 0) {
+                self.exhausted = .memory;
+                return true;
+            }
+            const cpu_stat = readGroupControl(self.path, "cpu.stat") catch return false;
+            const cpu_ms = controlCounter(cpu_stat, "usage_usec") / 1000;
+            if (cpu_ms >= limits.cpu_time_ms) {
+                self.exhausted = .cpu;
+                return true;
+            }
         }
         const pids_events = readGroupControl(self.path, "pids.events") catch return false;
         if (controlCounter(pids_events, "max") > 0) {
-            self.exhausted = .pids;
-            return true;
-        }
-        const cpu_stat = readGroupControl(self.path, "cpu.stat") catch return false;
-        const cpu_ms = controlCounter(cpu_stat, "usage_usec") / 1000;
-        if (cpu_ms >= self.limits.cpu_time_ms) {
-            self.exhausted = .cpu;
+            if (self.deny_descendants) {
+                self.descendant_denied = true;
+            } else {
+                self.exhausted = .pids;
+            }
             return true;
         }
         return false;
@@ -1525,6 +1562,7 @@ const ResourceGroup = struct {
             .memory_peak_bytes = memory_peak,
             .pids_peak = pids_peak,
             .exhausted = self.exhausted,
+            .descendant_denied = self.descendant_denied,
             .resource_group_removed = removed,
         };
     }

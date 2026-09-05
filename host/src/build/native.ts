@@ -193,6 +193,7 @@ export async function buildNative(
     outputDir,
     config,
     alpineBuild.ociSource,
+    binaries.sandboxdPath,
   );
 
   log(`Build complete! Assets written to ${outputDir}`);

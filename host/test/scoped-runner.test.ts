@@ -343,6 +343,15 @@ test("exec protocol carries pre-start write, resource, and isolation policy", ()
   assert.equal(payload.p.isolate_devices, true);
 });
 
+test("exec protocol carries an explicit no-descendants policy", () => {
+  const payload = buildExecRequest(9, {
+    cmd: "/opt/tools/compiler",
+    deny_descendants: true,
+  });
+
+  assert.equal(payload.p.deny_descendants, true);
+});
+
 test("all six invocation resource limits validate independently", () => {
   const invalidLimits = [
     { cpuTimeMs: 0 },
@@ -401,6 +410,22 @@ test("resource exhaustion outcomes remain structurally distinguishable", () => {
   assert.equal(__test.outcomeToExhausted("storage_exhausted"), "storage");
   assert.equal(__test.outcomeToExhausted("output_overflow"), "output");
   assert.equal(__test.outcomeToExhausted("timeout"), "wall-time");
+  assert.equal(
+    __test.exhaustionObservation("cpu", "cpu", false),
+    "guest-reported",
+  );
+  assert.equal(
+    __test.exhaustionObservation("cpu", "cpu", true),
+    "host-observed",
+  );
+  assert.equal(
+    __test.exhaustionObservation("memory", "memory", false),
+    "guest-reported",
+  );
+  assert.equal(
+    __test.exhaustionObservation("storage", null, false),
+    "host-observed",
+  );
 });
 
 test("host writable-storage budget aborts before an over-limit write", () => {
@@ -427,7 +452,7 @@ test("host writable-storage budget aborts before an over-limit write", () => {
   assert.equal(abort.signal.aborted, true);
 });
 
-test("feature manifest advertises QEMU resource controls without claiming krun qualification", () => {
+test("feature manifest keeps unqualified resource controls unverified", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
   assert.equal(manifest.profiles["scoped-runner"], "active");
   for (const guarantee of SCOPED_RUNNER_GUARANTEES) {
@@ -443,14 +468,33 @@ test("feature manifest advertises QEMU resource controls without claiming krun q
   );
   assert.equal(manifest.operations["environment.projected"], "active");
   assert.equal(manifest.operations["process.descendant-allow-list"], "active");
+  assert.equal(manifest.operations["process.descendants-denied"], "active");
+  assert.equal(manifest.guarantees["per-invocation-cpu"], "unverified");
+  assert.equal(manifest.guarantees["per-invocation-memory"], "unverified");
+  assert.equal(manifest.guarantees["per-invocation-pids"], "unverified");
+  assert.equal(manifest.guarantees["per-invocation-storage"], "unverified");
   assert.equal(
-    manifest.operations["process.descendants-denied"],
-    "unsupported",
+    manifest.guarantees["host-observed-resource-accounting"],
+    "unverified",
   );
-  assert.equal(manifest.guarantees["per-invocation-cpu"], "active");
-  assert.equal(manifest.guarantees["per-invocation-memory"], "active");
-  assert.equal(manifest.guarantees["per-invocation-pids"], "active");
-  assert.equal(manifest.guarantees["per-invocation-storage"], "active");
+  assert.equal(
+    manifest.operations["evidence.resource-usage.guest-reported"],
+    "active",
+  );
+  assert.equal(
+    manifest.operations["evidence.resource-usage.host-observed"],
+    "unverified",
+  );
+  for (const operation of [
+    "resource.cpu-time",
+    "resource.memory",
+    "resource.pids",
+    "resource.writable-storage",
+    "resource.output",
+    "resource.wall-time",
+  ]) {
+    assert.equal(manifest.operations[operation], "unverified", operation);
+  }
   assert.equal(manifest.backends.qemu, "active");
   assert.equal(manifest.backends.krun, "unverified");
   assert.equal(

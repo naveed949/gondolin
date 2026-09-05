@@ -43,6 +43,8 @@ export type ExecCommandMessage = {
   allowed_executables?: string[];
   /** exact writable files enforced for the complete process tree */
   allowed_writable_paths?: string[];
+  /** Additional-process denial within the guest execution group */
+  deny_descendants?: boolean;
   /** resource controllers installed before releasing the exec start gate */
   resource_limits?: {
     /** complete process-tree CPU time in `ms` */
@@ -169,7 +171,10 @@ export type StatusMessage = {
 };
 
 export type ServerMessage =
-  ExecResponseMessage | ErrorMessage | SnapshotResponseMessage | StatusMessage;
+  | ExecResponseMessage
+  | ErrorMessage
+  | SnapshotResponseMessage
+  | StatusMessage;
 
 export type OutputStream = "stdout" | "stderr";
 

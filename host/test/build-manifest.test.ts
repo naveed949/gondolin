@@ -58,6 +58,32 @@ test("builder: writeAssetManifest includes krun checksums when krun assets exist
   }
 });
 
+test("builder: descendant denial is bound to the embedded sandboxd", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-manifest-"));
+  const sandboxdPath = path.join(dir, "sandboxd");
+
+  try {
+    fs.writeFileSync(path.join(dir, KERNEL_FILENAME), "kernel");
+    fs.writeFileSync(path.join(dir, INITRAMFS_FILENAME), "initramfs");
+    fs.writeFileSync(path.join(dir, ROOTFS_FILENAME), "rootfs");
+    fs.writeFileSync(
+      sandboxdPath,
+      "binary-gondolin-feature:exec.descendants-denied/v1-binary",
+    );
+
+    const { manifest } = writeAssetManifest(
+      dir,
+      makeConfig(),
+      undefined,
+      sandboxdPath,
+    );
+
+    assert.ok(manifest.guestFeatures.includes("exec.descendants-denied/v1"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("builder: writeAssetManifest omits krun checksums when krun assets are absent", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-manifest-"));
 

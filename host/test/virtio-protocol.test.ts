@@ -168,6 +168,18 @@ test("virtio-protocol: buildExecRequest preserves capability isolation", () => {
   });
 });
 
+test("virtio-protocol: buildExecRequest preserves descendant denial", () => {
+  const req = buildExecRequest(8, {
+    cmd: "/bin/tool",
+    deny_descendants: true,
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/bin/tool",
+    deny_descendants: true,
+  });
+});
+
 test("virtio-protocol: buildStdinData and buildPtyResize shape", () => {
   const stdin = buildStdinData(1, Buffer.from("hi"));
   assert.deepEqual(stdin, {

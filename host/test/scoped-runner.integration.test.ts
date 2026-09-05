@@ -171,6 +171,31 @@ test(
       );
       assert.deepEqual(result.evidence.resources, result.resourceAccounting);
       assert.equal(result.resourceAccounting.exhausted, exhausted);
+      assert.equal(
+        result.resourceAccounting.observations.memory,
+        "guest-reported-cgroup-v2",
+      );
+      assert.equal(
+        result.resourceAccounting.observations.pids,
+        "guest-reported-cgroup-v2",
+      );
+      if (exhausted === "memory" || exhausted === "pids") {
+        assert.equal(
+          result.resourceAccounting.exhaustionObservation,
+          "guest-reported",
+        );
+      } else if (exhausted === "cpu") {
+        assert.ok(
+          result.resourceAccounting.exhaustionObservation ===
+            "guest-reported" ||
+            result.resourceAccounting.exhaustionObservation === "host-observed",
+        );
+      } else {
+        assert.equal(
+          result.resourceAccounting.exhaustionObservation,
+          exhausted === null ? null : "host-observed",
+        );
+      }
       assert.equal(result.evidence.teardown.commandStopped, true);
       assert.equal(result.evidence.teardown.vmStopped, true);
       assert.equal(result.evidence.teardown.processTreeEmpty, true);
@@ -208,7 +233,10 @@ test(
           },
           capabilities: {
             ...request().capabilities,
-            process: { descendants: "deny", allowedExecutables: [] },
+            process: {
+              descendants: "allow-list",
+              allowedExecutables: ["/bin/busybox"],
+            },
           },
           limits: {
             cpuTimeMs: 30_000,
@@ -230,6 +258,38 @@ test(
       );
       assertSettled(result, null);
     });
+
+    await t.test(
+      "deny descendant policy prevents process creation",
+      async () => {
+        const result = await context.invoke(
+          request({
+            invocationId: "runner-deny-descendants",
+            launch: {
+              executable: "/bin/busybox",
+              args: ["sh", "-c", "busybox echo child-ran & wait"],
+              cwd: "/data/repo",
+              mode: "direct",
+            },
+            capabilities: {
+              ...request().capabilities,
+              process: { descendants: "deny", allowedExecutables: [] },
+            },
+          }),
+        );
+
+        assert.equal(result.outcome, "policy_denied", result.error);
+        assert.doesNotMatch(result.stdout, /child-ran/);
+        assert.ok(
+          result.evidence.processEvents.some(
+            (event) =>
+              event.kind === "denial" &&
+              /descendant creation/.test(event.detail),
+          ),
+        );
+        assertSettled(result, null);
+      },
+    );
 
     await t.test("undeclared temporary storage is denied", async () => {
       const result = await invoke(

@@ -291,6 +291,8 @@ export type ExecRequest = {
     allowed_executables?: string[];
     /** exact writable files enforced for the complete process tree */
     allowed_writable_paths?: string[];
+    /** Additional-process denial within the guest execution group */
+    deny_descendants?: boolean;
     /** resource controllers installed before releasing the exec start gate */
     resource_limits?: {
       /** complete process-tree CPU time in `ms` */
@@ -499,6 +501,8 @@ export function buildExecRequest(
     cleaned.allowed_executables = payload.allowed_executables;
   if (payload.allowed_writable_paths !== undefined)
     cleaned.allowed_writable_paths = payload.allowed_writable_paths;
+  if (payload.deny_descendants !== undefined)
+    cleaned.deny_descendants = payload.deny_descendants;
   if (payload.resource_limits !== undefined)
     cleaned.resource_limits = payload.resource_limits;
   if (payload.isolate_ipc !== undefined)

@@ -353,9 +353,10 @@ It reports destination-bound HTTP/TLS header credentials independently from
 unsupported query, body, raw TCP, SSH, and external broker credential
 transports. It also marks libkrun, Windows, host-platform qualification,
 general runners, Git, IPC, and devices as unsupported or unverified.
-Scoped-runner resource controls are active only on their documented QEMU/Linux
-path and still require exact runtime qualification. A required
-feature that is not active must not be treated as degraded success.
+Scoped-runner resource enforcement is implemented only on its documented
+QEMU/Linux path, but its public resource guarantees and operations remain
+`unverified` until an exact released runtime combination passes qualification.
+A required feature that is not active must not be treated as degraded success.
 
 ## Exact-writer v1
 
@@ -406,20 +407,31 @@ const result = await context.invoke({
 The immutable ceiling names every eligible host target, guest binding, and
 operation. A request selects exactly one target and a non-empty operation
 subset. Missing targets require `create`; an existing target cannot receive a
-meaningless create-only grant. Rename, delete, metadata mutation, link creation,
-execute, parent-directory mutation, Git metadata, reads, networking,
-credentials, IPC, and devices are not granted by this profile.
+meaningless create-only grant. Guest-visible rename, delete, metadata mutation,
+link creation, execute, parent-directory access, Git metadata, reads,
+networking, credentials, IPC, and devices are not granted by this profile.
 
 Before admission, host targets are canonicalized and Git paths, symlinks, and
 hard-linked files are rejected. Existing target device/inode identity, missing
 target state, and parent-directory identity are pinned at ceiling creation and
-rechecked before execution and commit. Guest writes occur only in a fresh
-memory VFS. Host hooks deny reads and every non-target or unsupported operation.
-Only after the disposable VM has stopped is the private result committed through
-a no-follow, identity-checked descriptor. Creating an exact target therefore
-does not expose its parent directory to the guest. A rejected or failed host
-commit returns the distinct `commit_failure` outcome; it is never reported as a
-successful invocation.
+rechecked before execution and commit. After an authorized atomic publication,
+the context advances only that target's pin to the host-published inode so later
+invocations remain usable without accepting an external replacement. Guest
+writes occur only in a fresh memory VFS. Host hooks deny reads and every
+non-target or unsupported operation.
+Only after the disposable VM has stopped is the private result copied to a
+private staging inode in the pinned parent and atomically published at the exact
+target path. The original inode is never mutated during publication, so a
+concurrently created hard-link alias retains the original bytes. Creating an
+exact target therefore does not expose its parent directory to the guest. This
+host-mediated publication is part of the exact-writer contract: the host must
+be able to create a private staging directory and replace the selected directory
+entry. The `atomic-target-replacement` guarantee names this host authority
+explicitly. For an existing target it preserves owner, group, and permission
+bits, but intentionally publishes a new inode; ACLs, extended attributes, inode
+flags, and timestamps are not preserved. A target whose parent cannot support
+that publication is rejected with the distinct `commit_failure` outcome; it is
+never reported as a successful invocation.
 
 Writer evidence keeps requested, granted, attempted, denied, and observed
 effects separate, identifies resources by digest without recording content,
@@ -533,10 +545,12 @@ themselves and identify files with one hard link. Shell mode is separate
 declarative data and is admitted only when `allowShell` is true in the immutable
 ceiling; direct mode never adds an implicit shell.
 
-`process.descendants: "deny"` grants no additional executable path beyond the
-entrypoint; it does not claim a general prohibition on `fork` or entrypoint
-re-execution. Accordingly, `process.descendants-denied` remains unsupported in
-the feature manifest while the exact descendant allow-list is active.
+`process.descendants: "deny"` installs a pre-start cgroup PID ceiling of one,
+so the admitted entrypoint may start but cannot fork, clone, spawn, or retain a
+second process. Exact-reader and exact-writer invocations use the same explicit
+no-descendants exec policy. The feature manifest advertises
+`process.descendants-denied` only because the guest image declares and enforces
+that protocol feature.
 
 Each request independently contracts CPU time (`ms`), VM/process-tree memory
 (`bytes`), simultaneous PIDs, aggregate exact-file writable storage (`bytes`),
@@ -586,10 +600,11 @@ resource controllers, transport, and writable state are gone. If sandboxd
 returns normally it additionally reports whether it emptied and removed its
 cgroup before responding.
 
-This resource profile currently runs only on QEMU on Linux. libkrun remains
-`unverified`, Windows remains `unsupported`, and the general Linux host entry
-remains `unverified` until an exact released image, kernel, architecture, and
-conformance bundle combination passes the non-skipping qualification suite.
+This resource profile currently runs only on QEMU on Linux. Its resource
+guarantees and operations, libkrun, and the general Linux host entry remain
+`unverified`; Windows remains `unsupported`. Resource status becomes `active`
+only after an exact released image, kernel, architecture, and conformance bundle
+combination passes the non-skipping qualification suite.
 
 See [AdaptiveSandbox Conformance](adaptivesandbox-conformance.md) for the
 released-artifact pin, public-seam adapter, compatibility matrix, required

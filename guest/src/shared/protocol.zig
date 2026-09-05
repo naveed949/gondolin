@@ -57,6 +57,8 @@ pub const ExecResourceUsage = struct {
     pids_peak: u64,
     /// controller which caused termination
     exhausted: ?ExecResourceExhaustion,
+    /// descendant creation blocked by the process policy
+    descendant_denied: bool,
     /// resource-group empty-and-removed state
     resource_group_removed: bool,
 };
@@ -76,6 +78,8 @@ pub const ExecRequest = struct {
     allowed_executables: []const []const u8,
     /// exact writable files permitted for the complete process tree
     allowed_writable_paths: []const []const u8,
+    /// additional-process denial within the execution group
+    deny_descendants: bool,
     /// fail-closed complete-tree resource limits
     resource_limits: ?ExecResourceLimits,
     /// private IPC namespace required before process launch
@@ -475,7 +479,7 @@ pub fn encodeExecResponse(
     }
     if (resource_usage) |usage| {
         try cbor.writeText(w, "resource_usage");
-        try cbor.writeMapStart(w, 5);
+        try cbor.writeMapStart(w, 6);
         try cbor.writeText(w, "cpuTimeMs");
         try cbor.writeUInt(w, usage.cpu_time_ms);
         try cbor.writeText(w, "memoryPeakBytes");
@@ -488,6 +492,8 @@ pub fn encodeExecResponse(
         } else {
             try cbor.writeNull(w);
         }
+        try cbor.writeText(w, "descendantDenied");
+        try cbor.writeBool(w, usage.descendant_denied);
         try cbor.writeText(w, "resourceGroupRemoved");
         try cbor.writeBool(w, usage.resource_group_removed);
     }
@@ -850,6 +856,11 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
     const allowed_writable_paths = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_writable_paths"));
     errdefer allocator.free(allowed_writable_paths);
 
+    var deny_descendants = false;
+    if (cbor.getMapValue(payload, "deny_descendants")) |deny_descendants_val| {
+        deny_descendants = try expectBool(deny_descendants_val);
+    }
+
     var resource_limits: ?ExecResourceLimits = null;
     if (cbor.getMapValue(payload, "resource_limits")) |limits_val| {
         const limits = try expectMap(limits_val);
@@ -913,6 +924,7 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         .clear_env = clear_env,
         .allowed_executables = allowed_executables,
         .allowed_writable_paths = allowed_writable_paths,
+        .deny_descendants = deny_descendants,
         .resource_limits = resource_limits,
         .isolate_ipc = isolate_ipc,
         .isolate_devices = isolate_devices,

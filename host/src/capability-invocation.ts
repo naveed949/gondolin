@@ -29,6 +29,24 @@ import {
   type CapabilityEvidenceDecision,
   type CapabilityEvidenceIntegrity,
 } from "./invocation-evidence.ts";
+import {
+  canonicalHostFile,
+  canonicalHostTarget,
+  commitExactWriterTarget,
+  getHostFileIdentity,
+  getHostWriterTargetIdentity,
+  readExactHostFile,
+  readExactWriterTarget,
+  type CapabilityFilesystemValidation,
+  type HostFileIdentity,
+  type HostWriterTargetIdentity,
+} from "./capability-filesystem.ts";
+import { deepFreeze, sha256, stableJson } from "./canonical-json.ts";
+import {
+  isProcessAlive,
+  unavailableRuntimeIdentity,
+  uniqueSorted,
+} from "./capability-runtime.ts";
 
 export { CAPABILITY_EVIDENCE_SCHEMA_VERSION } from "./invocation-evidence.ts";
 
@@ -36,6 +54,12 @@ export const CAPABILITY_CEILING_SCHEMA_VERSION =
   "gondolin.capability-ceiling/v1" as const;
 export const CAPABILITY_INVOCATION_SCHEMA_VERSION =
   "gondolin.capability-invocation/v1" as const;
+
+const capabilityFilesystemValidation: CapabilityFilesystemValidation = {
+  invalid,
+  unsupported,
+  nonEmptyString,
+};
 
 export const CAPABILITY_EVIDENCE_GUARANTEES = [
   "authenticated-execution-identity",
@@ -79,7 +103,13 @@ export type ExactReaderGuarantee =
   | (typeof DESTINATION_BOUND_CREDENTIAL_GUARANTEES)[number];
 
 export type CapabilityHttpMethod =
-  "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
+  | "GET"
+  | "HEAD"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "OPTIONS";
 
 export type CapabilityNetworkRule = {
   /** Content-aware transport, where `tls` means HTTP/1.x over TLS */
@@ -274,6 +304,7 @@ export const EXACT_WRITER_GUARANTEES = [
   "canonical-request",
   "immutable-ceiling",
   "exact-file-write",
+  "atomic-target-replacement",
   "no-ambient-read",
   "no-network",
   "clean-environment",
@@ -419,7 +450,8 @@ export type ExactWriterInvocationRequest = {
 
 export type CapabilityCeiling = ExactReaderCeiling | ExactWriterCeiling;
 export type CapabilityInvocationRequest =
-  ExactReaderInvocationRequest | ExactWriterInvocationRequest;
+  | ExactReaderInvocationRequest
+  | ExactWriterInvocationRequest;
 
 export type CapabilityInvocationRuntimeOptions = {
   /** QEMU executable path */
@@ -445,7 +477,11 @@ export type CapabilityInvocationRuntimeOptions = {
 };
 
 export type CapabilityEffectDecision =
-  "requested" | "granted" | "attempted" | "denied" | "observed";
+  | "requested"
+  | "granted"
+  | "attempted"
+  | "denied"
+  | "observed";
 
 export type CapabilityFilesystemEffect = AuthenticatedEvidenceEvent & {
   /** Capability domain */
@@ -517,7 +553,12 @@ export type CapabilityCredentialEffect = AuthenticatedEvidenceEvent & {
   method?: string;
   /** Non-sensitive denial classification */
   reason?:
-    "missing" | "expired" | "revoked" | "mismatch" | "stale" | "inactive";
+    | "missing"
+    | "expired"
+    | "revoked"
+    | "mismatch"
+    | "stale"
+    | "inactive";
   /** Relationship of this event to enforcement */
   decision: CapabilityEffectDecision;
 };
@@ -675,11 +716,17 @@ export type CapabilityInvocationFeatureManifest = {
   requestSchemas: Record<string, CapabilityFeatureStatus>;
   /** Supported evidence schemas */
   evidenceSchemas: Record<string, CapabilityFeatureStatus>;
+  /** Available invocation profiles */
   profiles: Record<string, CapabilityFeatureStatus>;
+  /** Available virtualization backends */
   backends: Record<string, CapabilityFeatureStatus>;
+  /** Available host platforms */
   hosts: Record<string, CapabilityFeatureStatus>;
+  /** Implemented security guarantees */
   guarantees: Record<string, CapabilityFeatureStatus>;
+  /** Implemented authority domains */
   domains: Record<string, CapabilityFeatureStatus>;
+  /** Implemented policy operations */
   operations: Record<string, CapabilityFeatureStatus>;
   /** Non-wildcard released runtime/conformance combinations */
   qualifications: Record<string, CapabilityFeatureStatus>;
@@ -726,10 +773,11 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "explicit-shell": "active",
     "full-process-tree-termination": "active",
     "host-observed-process-lifecycle": "active",
-    "per-invocation-cpu": "active",
-    "per-invocation-memory": "active",
-    "per-invocation-pids": "active",
-    "per-invocation-storage": "active",
+    "per-invocation-cpu": "unverified",
+    "per-invocation-memory": "unverified",
+    "per-invocation-pids": "unverified",
+    "per-invocation-storage": "unverified",
+    "host-observed-resource-accounting": "unverified",
     "authenticated-execution-identity": "active",
     "concurrent-disjoint-authority": "active",
     "tamper-evident-evidence": "active",
@@ -789,16 +837,18 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "environment.projected": "active",
     "process.direct-executable": "active",
     "process.descendant-allow-list": "active",
-    "process.descendants-denied": "unsupported",
-    "resource.cpu-time": "active",
-    "resource.memory": "active",
-    "resource.pids": "active",
-    "resource.writable-storage": "active",
-    "resource.output": "active",
-    "resource.wall-time": "active",
+    "process.descendants-denied": "active",
+    "resource.cpu-time": "unverified",
+    "resource.memory": "unverified",
+    "resource.pids": "unverified",
+    "resource.writable-storage": "unverified",
+    "resource.output": "unverified",
+    "resource.wall-time": "unverified",
     "shell.explicit": "active",
     "evidence.ed25519": "active",
     "evidence.runtime-policy-binding": "active",
+    "evidence.resource-usage.guest-reported": "active",
+    "evidence.resource-usage.host-observed": "unverified",
   },
   qualifications: {
     "scoped-runner.resources/qemu/linux/released-image-kernel-arch-bundle":
@@ -869,10 +919,7 @@ export class CapabilityInvocationContext {
   private readonly runtime: Readonly<CapabilityInvocationRuntimeOptions>;
   private readonly credentialStore: CapabilityCredentialStore | null;
   private readonly sourceIdentities: ReadonlyMap<string, HostFileIdentity>;
-  private readonly targetIdentities: ReadonlyMap<
-    string,
-    HostWriterTargetIdentity
-  >;
+  private readonly targetIdentities: Map<string, HostWriterTargetIdentity>;
   private readonly usedInvocationIds = new Set<string>();
 
   private constructor(
@@ -894,7 +941,7 @@ export class CapabilityInvocationContext {
       ceiling.profile === "exact-reader"
         ? ceiling.filesystem.sourcePaths.map((sourcePath) => [
             sourcePath,
-            getHostFileIdentity(sourcePath),
+            getHostFileIdentity(sourcePath, capabilityFilesystemValidation),
           ])
         : [],
     );
@@ -902,7 +949,10 @@ export class CapabilityInvocationContext {
       ceiling.profile === "exact-writer"
         ? ceiling.filesystem.targetPaths.map((targetPath) => [
             targetPath,
-            getHostWriterTargetIdentity(targetPath),
+            getHostWriterTargetIdentity(
+              targetPath,
+              capabilityFilesystemValidation,
+            ),
           ])
         : [],
     );
@@ -1117,7 +1167,11 @@ export class CapabilityInvocationContext {
         "filesystem source has no identity in the immutable ceiling",
       );
     }
-    const source = readExactHostFile(sourcePath, sourceIdentity);
+    const source = readExactHostFile(
+      sourcePath,
+      sourceIdentity,
+      capabilityFilesystemValidation,
+    );
     const inputDigest = sha256(source);
     const resourceId = sha256(
       `file:${request.capabilities.filesystem.sourcePath}`,
@@ -1240,6 +1294,7 @@ export class CapabilityInvocationContext {
       runtime = vm.getRuntimeIdentity();
       for (const feature of [
         "exec.clear-env/v1",
+        "exec.descendants-denied/v1",
         "exec.executable-mount-policy/v1",
         "exec.landlock-allowlist/v1",
       ]) {
@@ -1275,6 +1330,7 @@ export class CapabilityInvocationContext {
         {
           clearEnv: true,
           allowedExecutables: [request.launch.executable],
+          denyDescendants: true,
           env: credentialMediator?.environment,
           signal: abort.signal,
           stdin: false,
@@ -1286,6 +1342,15 @@ export class CapabilityInvocationContext {
       );
       commandStopped = true;
       exitCode = result.exitCode;
+      if (result.resourceUsage?.descendantDenied === true) {
+        processEvents.push(
+          lifecycleEvent(
+            identity,
+            "policy",
+            "guest process policy denied descendant creation",
+          ),
+        );
+      }
       processEvents.push(
         lifecycleEvent(
           identity,
@@ -1294,7 +1359,7 @@ export class CapabilityInvocationContext {
         ),
       );
       outcome =
-        denied.length > 0
+        denied.length > 0 || result.resourceUsage?.descendantDenied === true
           ? "policy_denied"
           : result.exitCode === 0
             ? "success"
@@ -1307,7 +1372,7 @@ export class CapabilityInvocationContext {
       } else if (isMissingCapabilityPolicyError(caught)) {
         admissionError = new CapabilityAdmissionError(
           "unsupported",
-          "required guest executable policy or namespaces are unavailable",
+          "required guest process, executable, or namespace policy is unavailable",
         );
         outcome = "transport_failure";
       } else if (output.overflowed) outcome = "output_overflow";
@@ -1454,7 +1519,11 @@ export class CapabilityInvocationContext {
         "filesystem target has no identity in the immutable ceiling",
       );
     }
-    const initial = readExactWriterTarget(targetPath, targetIdentity);
+    const initial = readExactWriterTarget(
+      targetPath,
+      targetIdentity,
+      capabilityFilesystemValidation,
+    );
     const inputDigest = initial === null ? null : sha256(initial);
     const resourceId = sha256(`file:${targetPath}`);
     const requested = request.capabilities.filesystem.operations.map(
@@ -1530,6 +1599,7 @@ export class CapabilityInvocationContext {
       runtime = vm.getRuntimeIdentity();
       for (const feature of [
         "exec.clear-env/v1",
+        "exec.descendants-denied/v1",
         "exec.executable-mount-policy/v1",
         "exec.landlock-allowlist/v1",
       ]) {
@@ -1565,6 +1635,7 @@ export class CapabilityInvocationContext {
         {
           clearEnv: true,
           allowedExecutables: [request.launch.executable],
+          denyDescendants: true,
           signal: abort.signal,
           stdin: false,
           pty: false,
@@ -1575,6 +1646,15 @@ export class CapabilityInvocationContext {
       );
       commandStopped = true;
       exitCode = result.exitCode;
+      if (result.resourceUsage?.descendantDenied === true) {
+        processEvents.push(
+          lifecycleEvent(
+            identity,
+            "policy",
+            "guest process policy denied descendant creation",
+          ),
+        );
+      }
       processEvents.push(
         lifecycleEvent(
           identity,
@@ -1583,7 +1663,7 @@ export class CapabilityInvocationContext {
         ),
       );
       outcome =
-        denied.length > 0
+        denied.length > 0 || result.resourceUsage?.descendantDenied === true
           ? "policy_denied"
           : result.exitCode === 0
             ? "success"
@@ -1596,7 +1676,7 @@ export class CapabilityInvocationContext {
       } else if (isMissingCapabilityPolicyError(caught)) {
         admissionError = new CapabilityAdmissionError(
           "unsupported",
-          "required guest executable policy or namespaces are unavailable",
+          "required guest process, executable, or namespace policy is unavailable",
         );
         outcome = "transport_failure";
       } else if (output.overflowed) outcome = "output_overflow";
@@ -1632,16 +1712,20 @@ export class CapabilityInvocationContext {
     if (teardownComplete && hasObservedMutation(observed)) {
       try {
         finalContents = await readProviderFile(provider, relativeGuestPath);
-        commitExactWriterTarget(
+        const publishedIdentity = commitExactWriterTarget(
           targetPath,
           targetIdentity,
+          initial,
           finalContents,
           new Set(
             observed
               .map((effect) => effect.operation)
               .filter(isExactWriterOperation),
           ),
+          {},
+          capabilityFilesystemValidation,
         );
+        this.targetIdentities.set(targetPath, publishedIdentity);
       } catch (caught) {
         outcome = "commit_failure";
         error = safeError(caught);
@@ -3220,13 +3304,21 @@ function normalizeCeiling(input: unknown): CapabilityCeiling {
           filesystem.sourcePaths,
           "ceiling.filesystem.sourcePaths",
         ).map((value) =>
-          canonicalHostFile(value, "ceiling.filesystem.sourcePaths"),
+          canonicalHostFile(
+            value,
+            "ceiling.filesystem.sourcePaths",
+            capabilityFilesystemValidation,
+          ),
         )
       : stringArray(
           filesystem.targetPaths,
           "ceiling.filesystem.targetPaths",
         ).map((value) =>
-          canonicalHostTarget(value, "ceiling.filesystem.targetPaths"),
+          canonicalHostTarget(
+            value,
+            "ceiling.filesystem.targetPaths",
+            capabilityFilesystemValidation,
+          ),
         );
   const network =
     profile === "exact-reader"
@@ -3404,6 +3496,7 @@ function normalizeRequest(input: unknown): CapabilityInvocationRequest {
           sourcePath: canonicalHostFile(
             filesystem.sourcePath,
             "request.capabilities.filesystem.sourcePath",
+            capabilityFilesystemValidation,
           ),
           guestPath,
           operations: ["read"],
@@ -3435,6 +3528,7 @@ function normalizeRequest(input: unknown): CapabilityInvocationRequest {
         targetPath: canonicalHostTarget(
           filesystem.targetPath,
           "request.capabilities.filesystem.targetPath",
+          capabilityFilesystemValidation,
         ),
         guestPath,
         operations,
@@ -3444,317 +3538,6 @@ function normalizeRequest(input: unknown): CapabilityInvocationRequest {
     },
     requiredGuarantees: requiredGuarantees as ExactWriterGuarantee[],
   };
-}
-
-function canonicalHostFile(value: unknown, label: string): string {
-  const input = nonEmptyString(value, label);
-  const lexical = path.resolve(input);
-  let stats: fs.Stats;
-  try {
-    stats = fs.lstatSync(lexical);
-  } catch {
-    invalid(`${label} must identify an existing host file`);
-  }
-  if (stats!.isSymbolicLink() || !stats!.isFile()) {
-    invalid(
-      `${label} must identify a regular file without symlink indirection`,
-    );
-  }
-  return fs.realpathSync(lexical);
-}
-
-function canonicalHostTarget(value: unknown, label: string): string {
-  const input = nonEmptyString(value, label);
-  const lexical = path.resolve(input);
-  const parent = path.dirname(lexical);
-  let canonicalParent: string;
-  try {
-    canonicalParent = fs.realpathSync(parent);
-  } catch {
-    invalid(`${label} parent must identify an existing directory`);
-  }
-  const target = path.join(canonicalParent!, path.basename(lexical));
-  if (
-    target
-      .split(path.sep)
-      .some((component) => component.toLowerCase() === ".git")
-  ) {
-    unsupported(`${label} cannot select Git metadata`);
-  }
-  try {
-    const stats = fs.lstatSync(target, { bigint: true });
-    if (stats.isSymbolicLink() || !stats.isFile()) {
-      invalid(
-        `${label} must identify a regular file or a missing exact target`,
-      );
-    }
-    if (stats.nlink !== 1n) {
-      invalid(`${label} cannot select a hard-linked file`);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  return target;
-}
-
-type HostFileIdentity = {
-  dev: bigint;
-  ino: bigint;
-};
-
-type HostWriterTargetIdentity = {
-  parent: HostFileIdentity;
-  file: HostFileIdentity | null;
-};
-
-function getHostWriterTargetIdentity(
-  targetPath: string,
-): HostWriterTargetIdentity {
-  const parent = getHostDirectoryIdentity(path.dirname(targetPath));
-  try {
-    const stats = fs.lstatSync(targetPath, { bigint: true });
-    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1n) {
-      invalid("filesystem target must remain a uniquely linked regular file");
-    }
-    return { parent, file: { dev: stats.dev, ino: stats.ino } };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { parent, file: null };
-    }
-    throw error;
-  }
-}
-
-function getHostDirectoryIdentity(directoryPath: string): HostFileIdentity {
-  let fd: number;
-  try {
-    fd = fs.openSync(
-      directoryPath,
-      fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0),
-    );
-  } catch {
-    invalid("filesystem target parent changed or could not be opened");
-  }
-  try {
-    const stats = fs.fstatSync(fd!, { bigint: true });
-    if (!stats.isDirectory())
-      invalid("filesystem target parent is no longer a directory");
-    return { dev: stats.dev, ino: stats.ino };
-  } finally {
-    fs.closeSync(fd!);
-  }
-}
-
-function getHostFileIdentity(filePath: string): HostFileIdentity {
-  const noFollow = fs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number") {
-    unsupported(
-      "host platform cannot open exact files without following links",
-    );
-  }
-  let fd: number;
-  try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
-  } catch {
-    invalid(
-      "filesystem source changed or could not be opened without symlink traversal",
-    );
-  }
-  try {
-    const stats = fs.fstatSync(fd!, { bigint: true });
-    if (!stats.isFile())
-      invalid("filesystem source is no longer a regular file");
-    return { dev: stats.dev, ino: stats.ino };
-  } finally {
-    fs.closeSync(fd!);
-  }
-}
-
-function readExactHostFile(
-  filePath: string,
-  expected: HostFileIdentity,
-): Buffer {
-  const noFollow = fs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number") {
-    unsupported(
-      "host platform cannot open exact files without following links",
-    );
-  }
-  let fd: number;
-  try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
-  } catch {
-    invalid(
-      "filesystem source changed or could not be opened without symlink traversal",
-    );
-  }
-  try {
-    const stats = fs.fstatSync(fd!, { bigint: true });
-    if (!stats.isFile())
-      invalid("filesystem source is no longer a regular file");
-    if (stats.dev !== expected.dev || stats.ino !== expected.ino) {
-      invalid("filesystem source identity changed after ceiling creation");
-    }
-    return fs.readFileSync(fd!);
-  } finally {
-    fs.closeSync(fd!);
-  }
-}
-
-function readExactWriterTarget(
-  targetPath: string,
-  expected: HostWriterTargetIdentity,
-): Buffer | null {
-  verifyHostDirectoryIdentity(path.dirname(targetPath), expected.parent);
-  if (expected.file === null) {
-    try {
-      fs.lstatSync(targetPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-    invalid("filesystem target appeared after ceiling creation");
-  }
-  const fd = openExactWriterFile(
-    targetPath,
-    expected.file,
-    fs.constants.O_RDONLY,
-  );
-  try {
-    return fs.readFileSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function openExactWriterFile(
-  targetPath: string,
-  expected: HostFileIdentity,
-  access: number,
-): number {
-  const noFollow = fs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number") {
-    unsupported(
-      "host platform cannot open exact writer targets without following links",
-    );
-  }
-  let fd: number;
-  try {
-    fd = fs.openSync(targetPath, access | noFollow);
-  } catch {
-    invalid(
-      "filesystem target changed or could not be opened without symlink traversal",
-    );
-  }
-  const stats = fs.fstatSync(fd!, { bigint: true });
-  if (
-    !stats.isFile() ||
-    stats.nlink !== 1n ||
-    stats.dev !== expected.dev ||
-    stats.ino !== expected.ino
-  ) {
-    fs.closeSync(fd!);
-    invalid("filesystem target identity changed after ceiling creation");
-  }
-  return fd!;
-}
-
-function verifyHostDirectoryIdentity(
-  directoryPath: string,
-  expected: HostFileIdentity,
-): void {
-  const actual = getHostDirectoryIdentity(directoryPath);
-  if (actual.dev !== expected.dev || actual.ino !== expected.ino) {
-    invalid("filesystem target parent identity changed after ceiling creation");
-  }
-}
-
-function commitExactWriterTarget(
-  targetPath: string,
-  expected: HostWriterTargetIdentity,
-  contents: Buffer,
-  observedOperations: ReadonlySet<ExactWriterOperation> = new Set([
-    "create",
-    "write",
-    "truncate",
-  ]),
-): void {
-  verifyHostDirectoryIdentity(path.dirname(targetPath), expected.parent);
-  let fd: number;
-  if (expected.file === null) {
-    if (!observedOperations.has("create")) {
-      invalid("writer produced a missing target without an observed create");
-    }
-    const noFollow = fs.constants.O_NOFOLLOW;
-    if (typeof noFollow !== "number") {
-      unsupported(
-        "host platform cannot create exact writer targets without following links",
-      );
-    }
-    try {
-      fd = fs.openSync(
-        targetPath,
-        fs.constants.O_CREAT |
-          fs.constants.O_EXCL |
-          fs.constants.O_RDWR |
-          noFollow,
-        0o600,
-      );
-    } catch {
-      invalid("filesystem target appeared or changed before exact creation");
-    }
-  } else {
-    fd = openExactWriterFile(targetPath, expected.file, fs.constants.O_RDWR);
-  }
-  try {
-    if (expected.file === null || observedOperations.has("truncate")) {
-      fs.ftruncateSync(fd!, 0);
-      if (contents.length) fs.writeSync(fd!, contents, 0, contents.length, 0);
-    } else if (observedOperations.has("write")) {
-      const before = fs.readFileSync(fd!);
-      writeChangedRanges(fd!, before, contents);
-    }
-    fs.fsyncSync(fd!);
-    const stats = fs.fstatSync(fd!, { bigint: true });
-    if (!stats.isFile() || stats.nlink !== 1n) {
-      invalid(
-        "filesystem target gained an alternate hard-link alias during commit",
-      );
-    }
-  } finally {
-    fs.closeSync(fd!);
-  }
-  verifyHostDirectoryIdentity(path.dirname(targetPath), expected.parent);
-}
-
-function writeChangedRanges(fd: number, before: Buffer, after: Buffer): void {
-  if (after.length < before.length) {
-    invalid("writer shortened the target without truncate authority");
-  }
-  let offset = 0;
-  while (offset < after.length) {
-    if (offset < before.length && before[offset] === after[offset]) {
-      offset += 1;
-      continue;
-    }
-    const start = offset;
-    while (
-      offset < after.length &&
-      (offset >= before.length || before[offset] !== after[offset])
-    ) {
-      offset += 1;
-    }
-    fs.writeSync(fd, after, start, offset - start, start);
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
 }
 
 function normalizeGuestPath(
@@ -4037,33 +3820,6 @@ function unsupported(message: string): never {
   throw new CapabilityAdmissionError("unsupported", message);
 }
 
-function uniqueSorted<T extends string>(values: T[]): T[] {
-  return [...new Set(values)].sort() as T[];
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-    .join(",")}}`;
-}
-
-function sha256(value: string | Buffer): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const nested of Object.values(value as Record<string, unknown>))
-      deepFreeze(nested);
-    Object.freeze(value);
-  }
-  return value;
-}
-
 function normalizeProviderPath(value: string): string {
   const normalized = path.posix.normalize(
     value.startsWith("/") ? value : `/${value}`,
@@ -4142,19 +3898,6 @@ function hasObservedMutation(effects: readonly CapabilityEffect[]): boolean {
   return effects.some((effect) => isExactWriterOperation(effect.operation));
 }
 
-function unavailableRuntimeIdentity(): VmRuntimeIdentity {
-  return {
-    vmm: "qemu",
-    hostPlatform: process.platform,
-    hostArchitecture: process.arch,
-    guestArchitecture: "unknown",
-    imageDigest: "unavailable",
-    guestKernelDigest: "unavailable",
-    guestControlDigest: "unavailable",
-    guestFeatures: [],
-  };
-}
-
 function safeError(
   error: unknown,
   redact: (value: string) => string = (value) => value,
@@ -4164,7 +3907,7 @@ function safeError(
 }
 
 function isMissingCapabilityPolicyError(error: unknown): boolean {
-  return /(capability_policy|namespace_isolation)_unavailable/.test(
+  return /(capability_policy|namespace_isolation|resource_controller)_unavailable/.test(
     error instanceof Error ? error.message : String(error),
   );
 }
