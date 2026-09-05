@@ -30,7 +30,7 @@ export type VMOptions = {
   sandbox?: SandboxServerOptions;
   /** rootfs mode override */
   rootfs?: VmRootfsOptions;
-  /** whether to boot the vm immediately (default: true) */
+  /** Whether operations may boot the VM automatically; explicit start() always may (default: true) */
   autoStart?: boolean;
   /** http fetch implementation for asset downloads */
   fetch?: HttpFetch;
