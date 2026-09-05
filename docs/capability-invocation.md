@@ -424,8 +424,16 @@ target state, and parent-directory identity are pinned at ceiling creation and
 rechecked before execution and commit. After an authorized atomic publication,
 the context advances only that target's pin to the host-published inode so later
 invocations remain usable without accepting an external replacement. Guest
-writes occur only in a fresh memory VFS. Host hooks deny reads and every
-non-target or unsupported operation.
+writes occur only in a fresh memory VFS. Its exact output inode is prepared
+before Landlock setup, including an empty placeholder when the host target does
+not yet exist. The guest therefore sees an existing output path; it must not rely
+on an exclusive-create syscall or absence check to infer host target state.
+The first authorized writable open or mutation records logical creation, while
+unused placeholders are never published. Initial zero-length truncation of a
+still-empty new output is part of creation; truncation after writing content
+requires explicit `truncate` authority. Landlock grants write access to only the
+prepared file inode, never its parent. Host hooks deny reads and every non-target
+or unsupported operation.
 Only after the disposable VM has stopped is the private result copied to a
 private staging inode in the pinned parent and atomically published at the exact
 target path. The original inode is never mutated during publication, so a

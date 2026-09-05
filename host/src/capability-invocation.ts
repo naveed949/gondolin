@@ -1625,6 +1625,7 @@ export class CapabilityInvocationContext {
         {
           clearEnv: true,
           allowedExecutables: [request.launch.executable],
+          allowedWritablePaths: [request.capabilities.filesystem.guestPath],
           denyDescendants: true,
           isolateIpc: true,
           isolateDevices: true,
@@ -1899,6 +1900,8 @@ type EvidenceHookContext = {
   oldPath?: string;
   newPath?: string;
   flags?: string | number;
+  /** Target length in `bytes` for truncate operations */
+  size?: number;
 };
 
 function createWriterEvidenceHooks(options: {
@@ -1912,6 +1915,8 @@ function createWriterEvidenceHooks(options: {
   denied: CapabilityEffect[];
   observed: CapabilityEffect[];
 }) {
+  let targetCreated = options.targetInitiallyExists;
+  let contentWritten = false;
   const effects = (
     context: EvidenceHookContext,
   ): Array<{
@@ -1930,7 +1935,31 @@ function createWriterEvidenceHooks(options: {
       return [{ operation: "metadata-write", permitted: false }];
     }
     if (/truncate/i.test(context.op)) {
+      // The private inode must exist before Landlock setup. Opening a new empty
+      // output may truncate that placeholder before or after its writable open.
+      if (
+        !options.targetInitiallyExists &&
+        !contentWritten &&
+        context.size === 0
+      ) {
+        return targetCreated
+          ? [{ operation: "lookup", permitted: true }]
+          : [
+              {
+                operation: "create",
+                permitted: options.operations.has("create"),
+              },
+            ];
+      }
       return [
+        ...(!targetCreated
+          ? [
+              {
+                operation: "create" as const,
+                permitted: options.operations.has("create"),
+              },
+            ]
+          : []),
         {
           operation: "truncate",
           permitted: options.operations.has("truncate"),
@@ -1948,13 +1977,16 @@ function createWriterEvidenceHooks(options: {
         permitted: boolean;
       }> = [];
       if (isWritableOpen(context.flags)) {
-        if (!options.targetInitiallyExists && openCreates(context.flags)) {
+        if (!targetCreated) {
           result.push({
             operation: "create",
             permitted: options.operations.has("create"),
           });
         }
-        if (options.targetInitiallyExists && openTruncates(context.flags)) {
+        if (
+          (options.targetInitiallyExists || contentWritten) &&
+          openTruncates(context.flags)
+        ) {
           result.push({
             operation: "truncate",
             permitted: options.operations.has("truncate"),
@@ -2016,6 +2048,9 @@ function createWriterEvidenceHooks(options: {
       if (providerPath !== options.exactPath) return;
       for (const item of effects(context)) {
         if (!item.permitted || item.operation === "lookup") continue;
+        if (item.operation === "create") targetCreated = true;
+        if (item.operation === "write" || item.operation === "truncate")
+          contentWritten = true;
         options.observed.push(
           authenticatedEffect(options.identity, {
             domain: "filesystem",
@@ -2054,12 +2089,6 @@ function isWritableOpen(flags: string | number): boolean {
   return (flags & writeMask) !== 0;
 }
 
-function openCreates(flags: string | number): boolean {
-  return typeof flags === "string"
-    ? /^[wax]/.test(flags)
-    : (flags & fs.constants.O_CREAT) !== 0;
-}
-
 function openTruncates(flags: string | number): boolean {
   return typeof flags === "string"
     ? flags.startsWith("w")
@@ -2088,9 +2117,9 @@ async function populateWriterSnapshot(
 ): Promise<void> {
   const directory = path.posix.dirname(filePath);
   if (directory !== "/") await provider.mkdir(directory, { recursive: true });
-  if (contents === null) return;
+  // Bind Landlock to this exact private inode, even for a not-yet-created host target.
   const handle = await provider.open(filePath, "w", 0o600);
-  await handle.writeFile(contents);
+  await handle.writeFile(contents ?? Buffer.alloc(0));
   await handle.close();
 }
 
@@ -3905,4 +3934,8 @@ function isMissingCapabilityPolicyError(error: unknown): boolean {
 }
 
 /** @internal */
-export const __test = { redactCredentialBuffer };
+export const __test = {
+  redactCredentialBuffer,
+  createWriterEvidenceHooks,
+  populateWriterSnapshot,
+};

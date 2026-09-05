@@ -107,6 +107,19 @@ export function assertSafeWritePath(target: string, root: string): void {
   }
 }
 
+/** Pre-create a resolver mount point without replacing image-provided content. */
+export function ensureResolverMountTarget(rootfsDir: string): void {
+  const target = path.join(rootfsDir, "etc/resolv.conf");
+  try {
+    fs.lstatSync(target);
+    return;
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  assertSafeWritePath(target, rootfsDir);
+  fs.closeSync(fs.openSync(target, "wx", 0o644));
+}
+
 export function hardenExtractedRootfs(rootfsDir: string): void {
   const absRoot = path.resolve(rootfsDir);
   const stack = [absRoot];

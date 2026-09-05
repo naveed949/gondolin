@@ -484,7 +484,15 @@ mkdir -p /newroot/proc /newroot/sys /newroot/dev /newroot/run
 
 if [ -s /etc/resolv.conf ]; then
   mkdir -p /newroot/etc
-  cp /etc/resolv.conf /newroot/etc/resolv.conf 2>/dev/null || true
+  if ! cp /etc/resolv.conf /newroot/etc/resolv.conf 2>/dev/null; then
+    # Read-only roots cannot receive DHCP configuration through a file copy.
+    # Keep the populated initramfs inode mounted across switch_root instead.
+    if [ -f /newroot/etc/resolv.conf ] && [ ! -L /newroot/etc/resolv.conf ]; then
+      mount -o bind /etc/resolv.conf /newroot/etc/resolv.conf || log "[initramfs] resolver bind mount failed"
+    else
+      log "[initramfs] resolver mount target is not a regular file"
+    fi
+  fi
 fi
 
 exec switch_root /newroot /init

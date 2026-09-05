@@ -19,6 +19,7 @@ import { extractTarGz } from "../alpine/tar.ts";
 import {
   assertSafeWritePath,
   ensureRootfsShell,
+  ensureResolverMountTarget,
   hardenExtractedRootfs,
 } from "../alpine/rootfs.ts";
 import { exportOciRootfs } from "../alpine/oci.ts";
@@ -200,6 +201,7 @@ export async function buildAlpineImages(
   }
 
   ensureRuntimeDirs(rootfsDir);
+  ensureResolverMountTarget(rootfsDir);
   ensureRuntimeDirs(initramfsDir);
 
   syncKernelModules(rootfsDir, initramfsDir, log, {

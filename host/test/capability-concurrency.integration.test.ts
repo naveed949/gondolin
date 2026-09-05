@@ -23,11 +23,13 @@ import {
   type ExactReaderInvocationRequest,
 } from "../src/index.ts";
 import { shouldSkipVmTests } from "./helpers/vm-fixture.ts";
+import { mockCapabilityNetworkDns } from "./helpers/capability-network.ts";
 
 test(
   "concurrent public invocations cannot union filesystem, runner, environment, network, or credential authority",
   { skip: shouldSkipVmTests(), timeout: 120_000 },
-  async () => {
+  async (t) => {
+    mockCapabilityNetworkDns(t);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-concurrent-"));
     const readerA = path.join(root, "reader-a.txt");
     const readerB = path.join(root, "reader-b.txt");
@@ -113,7 +115,7 @@ test(
       });
       const rule: CapabilityNetworkRule = {
         protocol: "http",
-        destination: "127.0.0.1",
+        destination: "capability.test",
         port: address.port,
         methods: ["GET"],
         redirects: "deny",
@@ -125,7 +127,7 @@ test(
         projection: "API_TOKEN",
         redactionId: "concurrency-token-a",
         protocol: "http",
-        destination: "127.0.0.1",
+        destination: "capability.test",
         port: address.port,
         methods: ["GET"],
         validity: {},
@@ -135,7 +137,7 @@ test(
           value: "credential-a-secret",
           redactionId: "concurrency-token-a",
           protocol: "http",
-          destination: "127.0.0.1",
+          destination: "capability.test",
           port: address.port,
           methods: ["GET"],
         },
@@ -287,7 +289,7 @@ test(
             args: [
               "sh",
               "-c",
-              `busybox wget -qO- --header="X-Api-Token: $API_TOKEN" http://127.0.0.1:${address.port}/credential`,
+              `exec /bin/busybox wget -qO- --header="X-Api-Token: $API_TOKEN" http://capability.test:${address.port}/credential`,
             ],
           },
           capabilities: {
