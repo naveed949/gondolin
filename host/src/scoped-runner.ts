@@ -15,7 +15,7 @@ import {
   type CapabilityTeardownEvidence,
 } from "./capability-invocation.ts";
 import { VM, type VmRuntimeIdentity } from "./vm/core.ts";
-import { MemoryProvider } from "./vfs/node/index.ts";
+import { CapabilitySnapshotProvider } from "./capability-snapshot.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import type { VfsHookContext } from "./vfs/provider.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
@@ -559,7 +559,7 @@ export class ScopedRunnerInvocationContext {
     const requested = declaredEffects(identity, request, "requested");
     const granted = declaredEffects(identity, request, "granted");
     const processEvents: ScopedRunnerProcessEvent[] = [];
-    const provider = new MemoryProvider();
+    const provider = new CapabilitySnapshotProvider();
     const reads = new Map<string, ResourcePolicy>();
     const writes = new Map<string, ResourcePolicy>();
 
@@ -1653,7 +1653,7 @@ function declaredEffects(
 }
 
 async function populateFile(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
   contents: Buffer,
   mode: number,
@@ -1666,7 +1666,7 @@ async function populateFile(
 }
 
 async function readProviderFile(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
 ): Promise<Buffer> {
   const handle = await provider.open(filePath, "r");

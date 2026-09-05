@@ -165,7 +165,11 @@ test(
     });
     const allowed = await context.invoke(request());
 
-    assert.equal(allowed.outcome, "success", allowed.error);
+    assert.equal(
+      allowed.outcome,
+      "success",
+      `${allowed.error ?? ""}\n${allowed.stderr}`,
+    );
     assert.equal(allowed.stdout, "capability-data\n");
     assert.equal(allowed.stderr, "");
     assert.match(allowed.evidence.executionId, /^[0-9a-f-]{36}$/);

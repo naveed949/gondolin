@@ -13,7 +13,7 @@ import {
 } from "./qemu/contracts.ts";
 import { extractIPv4Mapped, parseIPv6Hextets } from "./utils/ip.ts";
 import { HttpRequestBlockedError } from "./http/utils.ts";
-import { MemoryProvider } from "./vfs/node/index.ts";
+import { CapabilitySnapshotProvider } from "./capability-snapshot.ts";
 import { createErrnoError } from "./vfs/errors.ts";
 import { ERRNO, isWriteFlag } from "./vfs/utils.ts";
 import { BoundedOutput } from "./bounded-output.ts";
@@ -1201,7 +1201,7 @@ export class CapabilityInvocationContext {
       );
     }
     const output = new BoundedOutput(request.limits.outputBytes, abort, redact);
-    const provider = new MemoryProvider();
+    const provider = new CapabilitySnapshotProvider();
     const relativeGuestPath = request.capabilities.filesystem.guestPath.slice(
       "/data".length,
     );
@@ -1528,7 +1528,7 @@ export class CapabilityInvocationContext {
     const processEvents: CapabilityLifecycleEvent[] = [];
     const abort = new AbortController();
     const output = new BoundedOutput(request.limits.outputBytes, abort);
-    const provider = new MemoryProvider();
+    const provider = new CapabilitySnapshotProvider();
     const relativeGuestPath = request.capabilities.filesystem.guestPath.slice(
       "/data".length,
     );
@@ -2067,7 +2067,7 @@ function openTruncates(flags: string | number): boolean {
 }
 
 async function populateSnapshot(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
   contents: Buffer,
 ): Promise<void> {
@@ -2082,7 +2082,7 @@ async function populateSnapshot(
 }
 
 async function populateWriterSnapshot(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
   contents: Buffer | null,
 ): Promise<void> {
@@ -2095,7 +2095,7 @@ async function populateWriterSnapshot(
 }
 
 async function readProviderFile(
-  provider: InstanceType<typeof MemoryProvider>,
+  provider: CapabilitySnapshotProvider,
   filePath: string,
 ): Promise<Buffer> {
   const handle = await provider.open(filePath, "r");
