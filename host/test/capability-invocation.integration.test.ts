@@ -159,7 +159,10 @@ test(
   "public seam allows only the exact reader and settles after teardown",
   { skip: shouldSkipVmTests(), timeout: 120_000 },
   async () => {
-    const context = CapabilityInvocationContext.create(ceiling());
+    const context = CapabilityInvocationContext.create(ceiling(), {
+      console: "stdio",
+      startTimeoutMs: 15_000,
+    });
     const allowed = await context.invoke(request());
 
     assert.equal(allowed.outcome, "success", allowed.error);

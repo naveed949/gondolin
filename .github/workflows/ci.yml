@@ -397,6 +397,13 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Check capability VM startup
+        timeout-minutes: 3
+        run: node --test --test-name-pattern='public seam allows only the exact reader' host/test/capability-invocation.integration.test.ts
+        env:
+          GONDOLIN_GUEST_DIR: ${{ github.workspace }}/guest/image/out
+          GONDOLIN_DEBUG: "exec,protocol,vfs"
+
       - name: Run tests
         # Run guest + host tests sequentially to avoid running multiple QEMU instances
         # concurrently (which can hang/time out on some CI runners).

@@ -244,7 +244,7 @@ test(
               'IFS= read -r source < /data/runner.txt; printf "%s:%s" "$RUN_ID" "$source"; printf runner-write > /data/runner-output.txt',
             ],
             cwd: "/data",
-            mode: "argv",
+            mode: "direct",
           },
           capabilities: {
             filesystem: {
