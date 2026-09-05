@@ -188,6 +188,10 @@ else
   log "[init] /sys/class/virtio-ports missing"
 fi
 
+# A transport can be modular even when virtio device drivers are built in.
+modprobe virtio_pci > /dev/null 2>&1 || true
+modprobe virtio_mmio > /dev/null 2>&1 || true
+
 if modprobe virtio_console > /dev/null 2>&1; then
   log "[init] loaded virtio_console"
 fi
@@ -420,6 +424,9 @@ if [ -r /proc/cmdline ]; then
   done
 fi
 
+# Load available transports before waiting for block and control-port devices.
+modprobe virtio_pci > /dev/null 2>&1 || true
+modprobe virtio_mmio > /dev/null 2>&1 || true
 modprobe virtio_blk > /dev/null 2>&1 || true
 modprobe ext4 > /dev/null 2>&1 || true
 modprobe virtio_console > /dev/null 2>&1 || true

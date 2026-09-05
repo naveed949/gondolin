@@ -5,7 +5,19 @@ import { assertSafeWritePath, resolveWritePath } from "./rootfs.ts";
 import type { KernelModuleSyncOptions } from "./types.ts";
 
 const MODULE_FILE_SUFFIXES = [".ko", ".ko.gz", ".ko.xz", ".ko.zst"] as const;
-const REQUIRED_INITRAMFS_MODULES = ["virtio_blk", "ext4"] as const;
+const REQUIRED_INITRAMFS_MODULES = [
+  "virtio_blk",
+  "virtio_console",
+  "ext4",
+] as const;
+// Transports are not dependencies of virtio device drivers. Copy whichever the
+// kernel supports; x86 PCI and ARM MMIO guests must discover devices before root.
+const VIRTIO_TRANSPORT_MODULES = ["virtio_pci", "virtio_mmio"] as const;
+const OPTIONAL_INITRAMFS_MODULES = [
+  "virtio_rng",
+  "virtio_net",
+  "fuse",
+] as const;
 
 export function syncKernelModules(
   rootfsDir: string,
@@ -93,6 +105,27 @@ function copyInitramfsModules(srcDir: string, dstDir: string): void {
         `Required kernel module "${moduleName}" was not found in ${srcDir}`,
       );
     }
+  }
+
+  let transportAvailable = false;
+  for (const moduleName of [
+    ...VIRTIO_TRANSPORT_MODULES,
+    ...OPTIONAL_INITRAMFS_MODULES,
+  ]) {
+    const normalizedName = normalizeModuleName(moduleName);
+    const resolvedPath = modulePathByName.get(normalizedName);
+    const available =
+      resolvedPath !== undefined || builtinModuleNames.has(normalizedName);
+    if (resolvedPath) stack.push(resolvedPath);
+    if (
+      available &&
+      VIRTIO_TRANSPORT_MODULES.some((name) => name === moduleName)
+    ) {
+      transportAvailable = true;
+    }
+  }
+  if (!transportAvailable) {
+    throw new Error(`No supported virtio transport was found in ${srcDir}`);
   }
 
   // Resolve transitive dependencies from modules.dep
