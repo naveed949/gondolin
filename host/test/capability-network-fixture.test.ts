@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import dns from "node:dns";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { createLookupGuard } from "../src/http/utils.ts";
-import { mockCapabilityNetworkDns } from "./helpers/capability-network.ts";
+import {
+  mockCapabilityNetworkDns,
+  resolverProbe,
+} from "./helpers/capability-network.ts";
 
 test("fixture DNS resolves host loopback through the real connection policy", async (t) => {
   mockCapabilityNetworkDns(t);
@@ -35,4 +42,27 @@ test("fixture DNS resolves host loopback through the real connection policy", as
     }),
   );
   assert.deepEqual(observations, ["capability.test:127.0.0.1"]);
+});
+
+test("guest resolver probe prints configuration before preserving payload stdout", (t) => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "gondolin-resolver-probe-"),
+  );
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const resolver = path.join(directory, "resolv.conf");
+  fs.writeFileSync(resolver, "nameserver 192.168.127.1\n");
+  const result = spawnSync(
+    "/bin/sh",
+    [
+      "-c",
+      resolverProbe.replace("/etc/resolv.conf", resolver) + "printf network-ok",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "network-ok");
+  assert.equal(
+    result.stderr,
+    "resolver-start\nresolver: nameserver 192.168.127.1\nresolver-end\n",
+  );
 });
