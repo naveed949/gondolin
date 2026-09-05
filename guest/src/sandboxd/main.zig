@@ -1685,8 +1685,8 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
     const ruleset_fd_raw = c.syscall(
         c.SYS_landlock_create_ruleset,
         &ruleset_attr,
-        @sizeOf(c.struct_landlock_ruleset_attr),
-        0,
+        @as(usize, @sizeOf(c.struct_landlock_ruleset_attr)),
+        @as(c_uint, 0),
     );
     if (ruleset_fd_raw < 0) return error.LandlockUnavailable;
     const ruleset_fd: c_int = @intCast(ruleset_fd_raw);
@@ -1739,7 +1739,7 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
             ruleset_fd,
             c.LANDLOCK_RULE_PATH_BENEATH,
             &path_attr,
-            0,
+            @as(c_uint, 0),
         ) < 0) return error.LandlockRuleFailed;
     }
 
@@ -1764,14 +1764,14 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
             ruleset_fd,
             c.LANDLOCK_RULE_PATH_BENEATH,
             &path_attr,
-            0,
+            @as(c_uint, 0),
         ) < 0) return error.LandlockRuleFailed;
     }
 
-    if (c.prctl(c.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+    if (c.prctl(c.PR_SET_NO_NEW_PRIVS, @as(c_ulong, 1), @as(c_ulong, 0), @as(c_ulong, 0), @as(c_ulong, 0)) != 0) {
         return error.NoNewPrivilegesFailed;
     }
-    if (c.syscall(c.SYS_landlock_restrict_self, ruleset_fd, 0) < 0) {
+    if (c.syscall(c.SYS_landlock_restrict_self, ruleset_fd, @as(c_uint, 0)) < 0) {
         return error.LandlockRestrictFailed;
     }
 }
