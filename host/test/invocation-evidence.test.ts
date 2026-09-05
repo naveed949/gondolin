@@ -22,6 +22,11 @@ import {
   sealCapabilityEvidence,
 } from "../src/invocation-evidence.ts";
 
+import {
+  __test as capabilityTest,
+  type CapabilityEffect,
+} from "../src/capability-invocation.ts";
+
 const requestDigest = `sha256:${"1".repeat(64)}`;
 const ceilingDigest = `sha256:${"2".repeat(64)}`;
 const vmId = "vm-evidence-fixture";
@@ -41,13 +46,15 @@ const policyVersions = {
   lifecycle: "one-shot-qemu/v1" as const,
 };
 
-function fixture() {
+function fixture(
+  network: "allowed" | "denied" | "unknown" | undefined = undefined,
+) {
   const identity = AuthenticatedExecutionIdentity.begin(
     requestDigest,
     ceilingDigest,
   );
   identity.bindVm(vmId);
-  const requested = [
+  const requested: CapabilityEffect[] = [
     {
       ...identity.authenticate(vmId),
       domain: "filesystem" as const,
@@ -57,27 +64,71 @@ function fixture() {
       decision: "requested" as const,
     },
   ];
-  const granted = [
+  const granted: CapabilityEffect[] = [
     {
       ...requested[0],
       ...identity.authenticate(vmId),
       decision: "granted" as const,
     },
   ];
-  const attempted = [
+  const attempted: CapabilityEffect[] = [
     {
       ...requested[0],
       ...identity.authenticate(vmId),
       decision: "attempted" as const,
     },
   ];
-  const observed = [
+  const observed: CapabilityEffect[] = [
     {
       ...requested[0],
       ...identity.authenticate(vmId),
       decision: "observed" as const,
     },
   ];
+  const denied: CapabilityEffect[] = [];
+  const fixturePolicyVersions = {
+    ...policyVersions,
+    ...(network ? { network: "http-tls-mediator/v1" as const } : {}),
+  };
+  if (network) {
+    const hooks = capabilityTest.createInvocationHttpHooks({
+      identity,
+      authority: {
+        rules: [
+          {
+            protocol: "http",
+            destination: "capability.test",
+            port: 80,
+            methods: ["GET"],
+            redirects: "same-origin",
+            resolution: "checked-host",
+            internalRanges: "deny",
+          },
+        ],
+      },
+      requested,
+      granted,
+      attempted,
+      denied,
+      observed,
+      credentialMediator: null,
+    });
+    const target = new Request(
+      network === "allowed"
+        ? "http://capability.test/target"
+        : network === "denied"
+          ? "http://unauthorized.test/target"
+          : "ftp://capability.test/target",
+    );
+    assert.equal(hooks.isRequestAllowed!(target), network === "allowed");
+    assert.equal(
+      hooks.isRedirectAllowed!(
+        new Request("http://capability.test/source"),
+        target,
+      ),
+      network === "allowed",
+    );
+  }
   const processEvents = [
     {
       ...identity.authenticate(vmId),
@@ -101,11 +152,15 @@ function fixture() {
     vfsHandlesRevoked: true,
     policyRemoved: true,
     ephemeralStateDestroyed: true,
+    ...(network ? { networkChannelsClosed: true } : {}),
     completedAt: "2026-09-04T00:00:01.000Z",
   };
   const result = {
-    outcome: "success" as const,
-    exitCode: 0,
+    outcome:
+      network && network !== "allowed"
+        ? ("policy_denied" as const)
+        : ("success" as const),
+    exitCode: network && network !== "allowed" ? 1 : 0,
     stdout: "fixture\n",
     stderr: "",
     outputTruncated: false,
@@ -119,7 +174,7 @@ function fixture() {
     evidenceSchemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
     featureManifestDigest,
     runtime,
-    policyVersions,
+    policyVersions: fixturePolicyVersions,
   });
   identity.finish("completed", true);
   const evidence = sealCapabilityEvidence({
@@ -135,13 +190,13 @@ function fixture() {
     runtime,
     featureManifestDigest,
     qualificationId,
-    policyVersions,
+    policyVersions: fixturePolicyVersions,
     inputDigest: `sha256:${"7".repeat(64)}`,
     outputDigest: `sha256:${"7".repeat(64)}`,
     requested,
     granted,
     attempted,
-    denied: [],
+    denied,
     observed,
     processEvents,
     startedAt: "2026-09-04T00:00:00.000Z",
@@ -384,4 +439,36 @@ function stableJson(value: unknown): string {
 
 function sha256(value: string | Buffer): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+for (const decision of ["allowed", "denied", "unknown"] as const) {
+  test(`public verifier accepts complete ${decision} HTTP request and redirect event sequences`, () => {
+    const result = fixture(decision);
+    const checked = verifyCapabilityInvocationResult(result);
+    assert.equal(checked.valid, true, checked.errors.join("; "));
+    const requestAttempts = result.evidence.attempted.filter(
+      (effect) => effect.domain === "network" && effect.operation === "request",
+    );
+    const redirectAttempts = result.evidence.attempted.filter(
+      (effect) =>
+        effect.domain === "network" && effect.operation === "redirect",
+    );
+    assert.equal(requestAttempts.length, 1);
+    assert.equal(redirectAttempts.length, 1);
+    if (decision !== "allowed") assert.equal(result.evidence.denied.length, 2);
+    // Even after legitimate signing, deleting a retained attempt still fails closed.
+    const changed = structuredClone(result);
+    changed.evidence.attempted = changed.evidence.attempted.filter(
+      (effect) => effect !== changed.evidence.attempted.at(-1),
+    );
+    const { integrity: _integrity, ...unsigned } = changed.evidence;
+    changed.evidence = sealCapabilityEvidence(unsigned);
+    const incomplete = verifyCapabilityInvocationResult(changed);
+    assert.equal(incomplete.valid, false);
+    assert.ok(
+      incomplete.errors.includes(
+        "authenticated evidence event sequence is incomplete",
+      ),
+    );
+  });
 }

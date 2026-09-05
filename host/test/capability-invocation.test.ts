@@ -440,6 +440,22 @@ test("credential authority contracts ceiling, network, methods, and validity", a
     }),
     { credentialStore: store },
   );
+  await assert.rejects(
+    context.invoke({
+      ...request({ invocationId: "host-secret-value" }),
+      capabilities: {
+        ...request().capabilities,
+        network: { rules: [...network.rules] },
+        credentials: { projections: [projection] },
+      },
+      requiredGuarantees: [...DESTINATION_BOUND_CREDENTIAL_GUARANTEES],
+    }),
+    (error: unknown) =>
+      error instanceof CapabilityAdmissionError &&
+      error.code === "invalid_request" &&
+      /contains trusted credential material/.test(error.message) &&
+      !error.message.includes("host-secret-value"),
+  );
   const missingStoreContext = CapabilityInvocationContext.create(
     ceiling({
       network: { rules: [...network.rules] },

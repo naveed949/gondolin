@@ -2999,16 +2999,16 @@ function createInvocationHttpHooks(options: {
             options.identity,
             parsed,
             "request",
-            rule ? "attempted" : "denied",
+            "attempted",
             method,
           )
-        : unknownNetworkEffect(options.identity, "request", "denied", method);
-      options.attempted.push(
-        authenticatedEffect(options.identity, {
-          ...withoutAuthentication(effect),
-          decision: "attempted" as const,
-        }),
-      );
+        : unknownNetworkEffect(
+            options.identity,
+            "request",
+            "attempted",
+            method,
+          );
+      options.attempted.push(effect);
       if (!rule) {
         options.denied.push(
           authenticatedEffect(options.identity, {
@@ -3075,23 +3075,21 @@ function createInvocationHttpHooks(options: {
             options.identity,
             to,
             "redirect",
-            allowed ? "observed" : "denied",
+            "attempted",
             targetMethod,
           )
         : unknownNetworkEffect(
             options.identity,
             "redirect",
-            "denied",
+            "attempted",
             targetMethod,
           );
-      options.attempted.push(
+      options.attempted.push(effect);
+      (allowed ? options.observed : options.denied).push(
         authenticatedEffect(options.identity, {
           ...withoutAuthentication(effect),
-          decision: "attempted" as const,
+          decision: allowed ? "observed" : "denied",
         }),
-      );
-      (allowed ? options.observed : options.denied).push(
-        authenticatedEffect(options.identity, withoutAuthentication(effect)),
       );
       return allowed;
     },
@@ -3938,4 +3936,5 @@ export const __test = {
   redactCredentialBuffer,
   createWriterEvidenceHooks,
   populateWriterSnapshot,
+  createInvocationHttpHooks,
 };

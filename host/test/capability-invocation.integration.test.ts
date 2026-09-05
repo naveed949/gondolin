@@ -846,7 +846,7 @@ test(
       });
       const expired = await context.invoke(
         credentialRequest(
-          "credential-expired",
+          "credential-expiry-check",
           `exec /bin/busybox wget -qO- --header=\"X-Api-Token: $API_TOKEN\" http://capability.test:${address.port}/expired`,
         ),
       );

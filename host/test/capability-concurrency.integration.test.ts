@@ -316,7 +316,12 @@ test(
       assert.equal(new Set(executionIds).size, results.length);
       assert.equal(new Set(vmIds).size, results.length);
       for (const result of results) {
-        assert.equal(verifyCapabilityInvocationResult(result).valid, true);
+        const verification = verifyCapabilityInvocationResult(result);
+        assert.equal(
+          verification.valid,
+          true,
+          `${result.evidence.policyVersions.admission} ${result.evidence.executionId}: ${verification.errors.join("; ")}`,
+        );
         assert.equal(
           probeCapabilityInvocationTeardown(result.evidence.executionId, {
             requestDigest: result.evidence.requestDigest,
