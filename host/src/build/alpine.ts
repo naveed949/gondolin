@@ -232,7 +232,22 @@ export async function buildAlpineImages(
 }
 
 function ensureRuntimeDirs(rootDir: string): void {
-  for (const sub of ["proc", "sys", "dev", "run"]) {
+  // Mount points must exist in the image before it is opened read-only.
+  for (const sub of [
+    "proc",
+    "sys",
+    "dev",
+    "run",
+    "tmp",
+    "var/tmp",
+    "var/cache",
+    "var/log",
+    "root",
+    "home",
+    "data",
+    "etc/gondolin",
+    "etc/gondolin/mitm",
+  ]) {
     const targetDir = path.join(rootDir, sub);
     assertSafeWritePath(targetDir, rootDir);
     fs.mkdirSync(targetDir, { recursive: true });

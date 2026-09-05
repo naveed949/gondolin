@@ -141,6 +141,8 @@ setup_mitm_ca() {
 
 mount -t proc proc /proc || log "[init] mount proc failed"
 mount -t sysfs sysfs /sys || log "[init] mount sysfs failed"
+mkdir -p /sys/fs/cgroup
+mount -t cgroup2 cgroup2 /sys/fs/cgroup || log "[init] mount cgroup2 failed"
 mount -t devtmpfs devtmpfs /dev || log "[init] mount devtmpfs failed"
 
 mkdir -p /dev/pts /dev/shm /run
