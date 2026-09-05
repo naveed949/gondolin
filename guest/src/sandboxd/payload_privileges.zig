@@ -4,8 +4,21 @@ const std = @import("std");
 const builtin = @import("builtin");
 const linux = std.os.linux;
 
-const Filter = extern struct { code: u16, jt: u8 = 0, jf: u8 = 0, k: u32 };
-const Program = extern struct { len: u16, filter: [*]const Filter };
+const Filter = extern struct {
+    /// Classic BPF opcode with instruction class, size, and mode bits
+    code: u16,
+    /// Instructions skipped after the current instruction when the condition is true
+    jt: u8 = 0,
+    /// Instructions skipped after the current instruction when the condition is false
+    jf: u8 = 0,
+    /// Opcode-dependent immediate value or absolute seccomp_data offset in `bytes`
+    k: u32,
+};
+const Program = extern struct {
+    /// Number of classic BPF instructions
+    len: u16,
+    filter: [*]const Filter,
+};
 // Linux's cap header contains a 32-bit pid even on 64-bit targets.
 const CapHeader = extern struct { version: u32 = 0x20080522, pid: u32 = 0 };
 const CapData = extern struct { effective: u32 = 0, permitted: u32 = 0, inheritable: u32 = 0 };

@@ -36,7 +36,10 @@ pub const Guard = struct {
 
 fn bpf(command: c_uint, attr: *Attr, size: usize) !c_int {
     const result = c.syscall(c.SYS_bpf, command, &attr.bytes, size);
-    if (result < 0) return error.ExecGuardUnavailable;
+    if (result < 0) {
+        std.log.err("exec guard bpf command={d} errno={d}", .{ command, @intFromEnum(std.posix.errno(result)) });
+        return error.ExecGuardUnavailable;
+    }
     return @intCast(result);
 }
 
@@ -57,7 +60,12 @@ fn readBtf(allocator: std.mem.Allocator) ![]u8 {
     return result.toOwnedSlice(allocator);
 }
 
-const BtfLayout = struct { filename_offset: u32, hook_id: u32 };
+const BtfLayout = struct {
+    /// Offset of linux_binprm.filename in `bytes`
+    filename_offset: u32,
+    /// BTF function type ID of the bprm_check_security LSM hook
+    hook_id: u32,
+};
 
 fn word(bytes: []const u8, offset: usize) !u32 {
     if (offset > bytes.len or bytes.len - offset < 4) return error.InvalidExecGuardBtf;
@@ -128,7 +136,16 @@ fn parseBtf(bytes: []const u8) !BtfLayout {
     };
 }
 
-const Insn = extern struct { code: u8, registers: u8, offset: i16 = 0, immediate: i32 = 0 };
+const Insn = extern struct {
+    /// eBPF opcode with instruction class, size, and mode bits
+    code: u8,
+    /// Destination register in the low nibble and source register in the high nibble
+    registers: u8,
+    /// Signed memory offset in `bytes` or jump displacement in instructions from the next instruction
+    offset: i16 = 0,
+    /// Opcode-dependent immediate operand or low/high half of a 64-bit literal
+    immediate: i32 = 0,
+};
 const Program = struct {
     items: [640]Insn = undefined,
     len: usize = 0,

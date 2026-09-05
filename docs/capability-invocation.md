@@ -284,16 +284,23 @@ WebSocket, query, body, and external broker credential transports remain
 unsupported.
 
 The selected image must declare `exec.clear-env/v1`,
-`exec.executable-mount-policy/v1`, and `exec.landlock-allowlist/v1` in its
-bound asset manifest. Exact-reader and
-exact-writer send the single admitted entrypoint as the complete-tree
-executable allow-list. A private noexec root view re-enables execution only on
-that exact file and the read-only runtime-library directories required by the
-ELF loader. Runtime libraries receive no Landlock `EXECUTE` rule, so they cannot
-be invoked directly; the exact-file mount prevents normal rootfs symlink aliases
-to the admitted inode from widening authority. Inherited Landlock rules deny
-every other executable for the complete tree. Older images that lack any
+`exec.executable-mount-policy/v1`, `exec.exact-path-lsm/v1`,
+`exec.payload-confinement/v1`, and `exec.landlock-allowlist/v1` in its
+bound asset manifest. Exact-reader and exact-writer send the single admitted
+entrypoint as the complete-tree executable allow-list. A private noexec root
+view re-enables execution only on that exact file and the read-only
+runtime-library directories required by the ELF loader. Landlock permits the
+admitted executable and its recorded ELF interpreter. A cgroup-bound BPF LSM
+guard checks the original executable pathname, preventing direct loader
+invocation and symlink aliases from widening the allow-list. The guard remains
+pinned until the invocation cgroup is removed. Older images that lack any
 implementation are rejected before the VM is started.
+
+Exact executable admission supports native 64-bit little-endian ELF files.
+Shebang scripts are not supported as direct entrypoints. Where the profile
+allows it, callers can explicitly admit a native interpreter and supply its
+script as an argument; this grants that interpreter's behavior within the
+remaining invocation limits.
 
 Every admitted call creates a new QEMU VM and fresh execution identity. The
 promise settles only after `VM.close()` succeeds. Its result separates requested,
@@ -538,9 +545,10 @@ evidence, and the bytes are destroyed during teardown. The read and write path
 sets must be disjoint, and VFS operations outside the exact set are denied.
 
 Process policy is carried over the authenticated exec channel and installed by
-the guest before the entrypoint starts. Linux Landlock restricts `execve` to the
-entrypoint plus the declared descendants, and the restriction is inherited by
-forked children. To avoid inode-alias bypasses, executable paths must resolve to
+the guest before the entrypoint starts. The cgroup BPF LSM guard restricts
+executable pathnames to the entrypoint plus the declared descendants, while
+Landlock constrains admitted executable and interpreter inodes. These
+restrictions also apply to forked children. To avoid inode-alias bypasses, executable paths must resolve to
 themselves and identify files with one hard link. Shell mode is separate
 declarative data and is admitted only when `allowShell` is true in the immutable
 ceiling; direct mode never adds an implicit shell.
@@ -575,9 +583,15 @@ tears down the VM before an exact-file write can cross
 
 The request also requires `exec.namespace-isolation/v1`. Before Landlock is
 installed, sandboxd creates a private IPC namespace and a private mount
-namespace with empty, non-executable tmpfs mounts over `/dev`, `/run`, and
-`/tmp`. Failure to create any namespace or mount fails the exec closed. This is
-per capability exec and does not change ordinary `VM.exec` behavior.
+namespace with empty, non-executable tmpfs mounts over `/dev`, `/run`, `/tmp`,
+and `/proc`. All capability profiles use this isolation. Inherited daemon file
+descriptors are marked close-on-exec, all Linux capabilities are dropped, and
+locked securebits prevent root execution from regaining them. An inherited
+seccomp filter denies namespace creation and kernel injection interfaces;
+Landlock scopes signals and abstract Unix sockets to the invocation domain.
+Failure to install any required restriction fails the exec closed. These
+restrictions apply per capability exec and do not change ordinary `VM.exec`
+behavior.
 
 The memory contract is deliberately whole-microVM for this one-invocation
 profile. QEMU's `-m` value limits all guest RAM to the requested aligned

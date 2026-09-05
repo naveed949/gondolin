@@ -773,8 +773,10 @@ fn runExecSession(session: *ExecSession) !void {
     };
 
     var guard: ?exec_guard.Guard = if (req.allowed_executables.len > 0)
-        exec_guard.install(arena_alloc, resource_group.?.path, req.allowed_executables) catch
-            return error.CapabilityPolicyUnavailable
+        exec_guard.install(arena_alloc, resource_group.?.path, req.allowed_executables) catch |err| {
+            log.err("exact executable guard installation failed: {s}", .{@errorName(err)});
+            return error.CapabilityPolicyUnavailable;
+        }
     else
         null;
     defer if (guard) |*installed| {
@@ -836,11 +838,7 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.exit(126);
             };
             if (req.allowed_executables.len > 0) {
-                if (c.syscall(c.SYS_close_range, @as(c_uint, 3), @as(c_uint, std.math.maxInt(c_uint)), @as(c_uint, 4)) != 0) {
-                    reportExecSetup(setup_gate, .policy_failed);
-                    posix.exit(126);
-                }
-                payload_privileges.drop() catch {
+                confinePayload() catch {
                     reportExecSetup(setup_gate, .policy_failed);
                     posix.exit(126);
                 };
@@ -931,11 +929,7 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.exit(126);
             };
             if (req.allowed_executables.len > 0) {
-                if (c.syscall(c.SYS_close_range, @as(c_uint, 3), @as(c_uint, std.math.maxInt(c_uint)), @as(c_uint, 4)) != 0) {
-                    reportExecSetup(setup_gate, .policy_failed);
-                    posix.exit(126);
-                }
-                payload_privileges.drop() catch {
+                confinePayload() catch {
                     reportExecSetup(setup_gate, .policy_failed);
                     posix.exit(126);
                 };
@@ -1431,6 +1425,15 @@ const ExecSetupStatus = enum(u8) {
     namespace_failed = 2,
     policy_failed = 3,
 };
+
+/// Preserve setup reporting until exec while excluding inherited daemon descriptors
+fn confinePayload() !void {
+    const close_range_cloexec: c_uint = 4;
+    if (c.syscall(c.SYS_close_range, @as(c_uint, 3), @as(c_uint, std.math.maxInt(c_uint)), close_range_cloexec) != 0) {
+        return error.PayloadDescriptorConfinementUnavailable;
+    }
+    try payload_privileges.drop();
+}
 
 fn reportExecSetup(gate: ?[2]posix.fd_t, status: ExecSetupStatus) void {
     const fds = gate orelse return;
