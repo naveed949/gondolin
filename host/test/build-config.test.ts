@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
-import { parseBuildConfig, validateBuildConfig } from "../src/build/config.ts";
+import {
+  getDefaultBuildConfig,
+  parseBuildConfig,
+  validateBuildConfig,
+} from "../src/build/config.ts";
 
 test("build-config: accepts postBuild.commands", () => {
   const cfg = {
@@ -168,4 +173,20 @@ test("build-config: rejects invalid oci rootfs configuration", () => {
     () => parseBuildConfig(JSON.stringify(invalid)),
     /Invalid build configuration/,
   );
+});
+
+test("build-config: fork capability image selects the LSM-capable kernel without changing generic defaults", () => {
+  const config = parseBuildConfig(
+    fs.readFileSync(
+      new URL("../../images/alpine-base.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.equal(config.alpine?.kernelPackage, "linux-lts");
+  assert.equal(config.alpine?.kernelImage, "vmlinuz-lts");
+  assert.ok(config.alpine?.rootfsPackages?.includes("linux-lts"));
+  assert.ok(!config.alpine?.rootfsPackages?.includes("linux-virt"));
+  const defaults = getDefaultBuildConfig();
+  assert.equal(defaults.alpine?.kernelPackage, "linux-virt");
+  assert.equal(defaults.alpine?.kernelImage, "vmlinuz-virt");
 });

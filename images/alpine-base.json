@@ -4,10 +4,10 @@
   "distro": "alpine",
   "alpine": {
     "version": "3.23.0",
-    "kernelPackage": "linux-virt",
-    "kernelImage": "vmlinuz-virt",
+    "kernelPackage": "linux-lts",
+    "kernelImage": "vmlinuz-lts",
     "rootfsPackages": [
-      "linux-virt",
+      "linux-lts",
       "rng-tools",
       "bash",
       "ca-certificates",

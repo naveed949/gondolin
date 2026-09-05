@@ -105,6 +105,7 @@ jobs:
           cd guest
           ALPINE_ARCH=${{ matrix.arch }} \
             GONDOLIN_SANDBOX_HELPERS_DIR="$PWD/zig-out" \
+            GONDOLIN_BUILD_CONFIG="../images/alpine-base.json" \
             make build NODE="$NODE_BIN"
 
       - name: Package assets
@@ -410,7 +411,7 @@ jobs:
         timeout-minutes: 20
         run: |
           NODE_BIN="$(node -p 'process.execPath')"
-          make -C guest test NODE="$NODE_BIN"
+          make -C guest test NODE="$NODE_BIN" GONDOLIN_BUILD_CONFIG="../images/alpine-base.json"
           make -C host test NODE="$NODE_BIN"
         env:
           GONDOLIN_GUEST_DIR: ${{ github.workspace }}/guest/image/out
