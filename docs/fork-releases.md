@@ -1,8 +1,11 @@
 # Experimental fork releases
 
-The first planned fork release is `v0.12.1-adaptivesandbox.1`. It is a GitHub-only,
+The next prepared fork release is `v0.12.1-adaptivesandbox.2`. It is a GitHub-only,
 QEMU-only prerelease for adapter development. It is not an AdaptiveSandbox-qualified
 release, and it does not unblock qualified production admission by itself.
+The tag and release are created only after the preparation changes are merged
+and the reviewed main commit passes CI. Existing release `.1` assets and
+consumer pins remain unchanged until `.2` is actually published and verified.
 
 ## Prepare and publish
 
@@ -13,8 +16,8 @@ release, and it does not unblock qualified production admission by itself.
    ```bash
    git switch main
    git pull --ff-only origin main
-   git tag -a v0.12.1-adaptivesandbox.1 -m "Experimental AdaptiveSandbox integration release"
-   git push origin v0.12.1-adaptivesandbox.1
+   git tag -a v0.12.1-adaptivesandbox.2 -m "Experimental AdaptiveSandbox integration release"
+   git push origin v0.12.1-adaptivesandbox.2
    ```
 
 3. Watch **Experimental GitHub Release** in Actions. It validates the tag, reuses
@@ -45,10 +48,10 @@ artifact removes optional krun packages and workspace lifecycle scripts. It can
 still be installed from a downloaded tarball:
 
 ```bash
-gh release download v0.12.1-adaptivesandbox.1 --repo naveed949/gondolin --dir gondolin-release
+gh release download v0.12.1-adaptivesandbox.2 --repo naveed949/gondolin --dir gondolin-release
 cd gondolin-release
 sha256sum --check SHA256SUMS
-npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.1.tgz
+npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.2.tgz
 ```
 
 On macOS, use `shasum -a 256 -c SHA256SUMS`. Install QEMU separately. The package's
@@ -60,7 +63,7 @@ image archive for a fully explicit local setup.
 
 The image registry includes an `alpine-base:latest` alias *within the fixed
 release registry*. For explicit development identity use
-`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.1`, or a digest-verified
+`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.2`, or a digest-verified
 extracted image directory. Existing local image caches and explicit overrides
 are operator state, not qualification evidence.
 
