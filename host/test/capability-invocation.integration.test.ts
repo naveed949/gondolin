@@ -940,7 +940,9 @@ for (const initiallyExists of [true, false]) {
           },
           limits: {
             outputBytes: scenario.outcome === "output_overflow" ? 4 : 1024,
-            wallTimeMs: 1000,
+            // The deadline includes exec setup; allow the staged write to run
+            // before the timeout case's infinite loop is interrupted in CI.
+            wallTimeMs: scenario.outcome === "timeout" ? 10_000 : 1000,
           },
         });
         if (!initiallyExists)
@@ -951,6 +953,17 @@ for (const initiallyExists of [true, false]) {
           result.evidence.observed.some(
             (effect) => effect.operation === "write",
           ),
+          `Expected a staged write before ${scenario.outcome}: ${JSON.stringify({
+            outcome: result.outcome,
+            exitCode: result.exitCode,
+            error: result.error?.slice(0, 1024),
+            stderr: result.stderr.slice(0, 1024),
+            observedOperations: result.evidence.observed
+              .slice(0, 16)
+              .map((effect) => effect.operation),
+            publication: result.evidence.publication?.state,
+            vmStopped: result.evidence.teardown.vmStopped,
+          })}`,
         );
         assert.equal(result.evidence.teardown.vmStopped, true);
         assert.equal(result.evidence.publication?.state, "not_published");

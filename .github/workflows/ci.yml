@@ -413,6 +413,26 @@ jobs:
           GONDOLIN_FORCE_VM_TESTS: "1"
           GONDOLIN_GUEST_DIR: ${{ github.workspace }}/guest/image/out
 
+      - name: Repeat exact-writer timeout publication checks
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$(mktemp)"
+          trap 'rm -f "$report"' EXIT
+          for iteration in 1 2 3; do
+            echo "Exact-writer timeout publication check $iteration/3"
+            node --test --test-reporter=tap \
+              --test-name-pattern='^public writer discards mutations on timeout, initially exists=(true|false)$' \
+              host/test/capability-invocation.integration.test.ts | tee "$report"
+            grep -Eq '^# pass 2$' "$report"
+            grep -Eq '^# skipped 0$' "$report"
+          done
+        env:
+          CI: "true"
+          GONDOLIN_FORCE_VM_TESTS: "1"
+          GONDOLIN_GUEST_DIR: ${{ github.workspace }}/guest/image/out
+
       - name: Run tests
         # Run guest + host tests sequentially to avoid running multiple QEMU instances
         # concurrently (which can hang/time out on some CI runners).
