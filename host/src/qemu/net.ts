@@ -51,6 +51,7 @@ import {
 import {
   caCertVerifiesLeaf,
   closeSharedDispatchers,
+  reopenHostHttpChannels,
   privateKeyMatchesLeafCert,
   HttpReceiveBuffer,
 } from "../http/utils.ts";
@@ -352,6 +353,10 @@ export class QemuNetworkBackend extends EventEmitter {
     this.notifyGuestActivityChange(),
   );
 
+  private closing = false;
+  private attachGeneration = 0;
+  private closePromise: Promise<void> | null = null;
+
   private readonly mitmDir: string;
   private caPromise: Promise<CaCert> | null = null;
   private tlsContexts = new Map<string, TlsContextCacheEntry>();
@@ -490,6 +495,7 @@ export class QemuNetworkBackend extends EventEmitter {
   }
 
   start() {
+    if (this.closing) throw new Error("network backend is closed");
     if (this.server) return;
 
     if (!fs.existsSync(path.dirname(this.options.socketPath))) {
@@ -497,14 +503,25 @@ export class QemuNetworkBackend extends EventEmitter {
     }
     fs.rmSync(this.options.socketPath, { force: true });
 
-    this.server = net.createServer((socket) => this.attachSocket(socket));
+    this.server = net.createServer((socket) => {
+      void this.attachSocket(socket).catch((error) => {
+        socket.destroy();
+        this.emit("error", error);
+      });
+    });
     this.server.on("error", (err) => this.emit("error", err));
     this.server.listen(this.options.socketPath);
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closing = true;
+    this.closePromise ??= this.closeInternal();
+    return this.closePromise;
+  }
+
+  private async closeInternal(): Promise<void> {
     this.detachSocket();
-    closeSharedDispatchers(this);
+    const httpSettlement = closeSharedDispatchers(this);
 
     if (this.eventLoopDelay) {
       try {
@@ -526,10 +543,26 @@ export class QemuNetworkBackend extends EventEmitter {
         }
       });
     }
+    await httpSettlement;
   }
 
-  private attachSocket(socket: net.Socket) {
-    if (this.socket) this.socket.destroy();
+  private async attachSocket(socket: net.Socket) {
+    const generation = ++this.attachGeneration;
+    if (this.closing) {
+      socket.destroy();
+      return;
+    }
+    if (this.socket) this.detachSocket();
+    await reopenHostHttpChannels(this);
+    if (
+      this.closing ||
+      socket.destroyed ||
+      generation !== this.attachGeneration
+    ) {
+      if (this.closing) void closeSharedDispatchers(this);
+      socket.destroy();
+      return;
+    }
     this.socket = socket;
     this.waitingDrain = false;
 
@@ -551,11 +584,11 @@ export class QemuNetworkBackend extends EventEmitter {
 
     socket.on("error", (err) => {
       this.emit("error", err);
-      this.detachSocket();
+      if (this.socket === socket) this.detachSocket();
     });
 
     socket.on("close", () => {
-      this.detachSocket();
+      if (this.socket === socket) this.detachSocket();
     });
   }
 
@@ -567,7 +600,7 @@ export class QemuNetworkBackend extends EventEmitter {
     this.http.qemuRxPausedForHttpStreaming = false;
     this.waitingDrain = false;
     this.cleanupSessions();
-    closeSharedDispatchers(this);
+    void closeSharedDispatchers(this);
     this.stack?.reset();
   }
 
@@ -739,6 +772,7 @@ export class QemuNetworkBackend extends EventEmitter {
     this.udpSessions.clear();
 
     for (const session of this.tcpSessions.values()) {
+      session.http?.hostAbortController?.abort(GUEST_CLOSED_ERR);
       try {
         session.socket?.destroy();
       } catch {
@@ -1047,6 +1081,7 @@ export class QemuNetworkBackend extends EventEmitter {
     const session = this.tcpSessions.get(message.key);
     if (session) {
       if (session.http) {
+        session.http.hostAbortController?.abort(GUEST_CLOSED_ERR);
         session.http.upstreamTainted = true;
         session.http.closed = true;
       }

@@ -11,7 +11,7 @@ import {
   type HttpHooks,
   type HttpIpAllowInfo,
 } from "./qemu/contracts.ts";
-import { extractIPv4Mapped, parseIPv6Hextets } from "./utils/ip.ts";
+import { isPublicAddress } from "./public-address.ts";
 import { HttpRequestBlockedError } from "./http/utils.ts";
 import { CapabilitySnapshotProvider } from "./capability-snapshot.ts";
 import { createErrnoError } from "./vfs/errors.ts";
@@ -635,7 +635,7 @@ export type CapabilityInvocationEvidence = {
     admission: "exact-reader/v1" | "exact-writer/v1";
     filesystem: "snapshot-vfs/v1" | "exact-writer-vfs/v1";
     process: "exact-mount-landlock/v1";
-    network?: "http-tls-mediator/v1";
+    network?: "http-tls-mediator/v2";
     credentials?: "destination-bound-credentials/v1";
     lifecycle: "one-shot-qemu/v1";
   };
@@ -804,6 +804,7 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "network.tls-http1": "active",
     "network.redirect.reauthorized": "active",
     "network.resolution.checked-host": "active",
+    "network.resolution.public-address-v1": "active",
     "network.internal-ranges.explicit": "active",
     "network.dns.synthetic": "active",
     "network.dns.trusted": "unsupported",
@@ -1441,7 +1442,7 @@ export class CapabilityInvocationContext {
       admission: "exact-reader/v1" as const,
       filesystem: "snapshot-vfs/v1" as const,
       process: "exact-mount-landlock/v1" as const,
-      ...(networkEnabled ? { network: "http-tls-mediator/v1" as const } : {}),
+      ...(networkEnabled ? { network: "http-tls-mediator/v2" as const } : {}),
       ...(credentialMediator
         ? { credentials: "destination-bound-credentials/v1" as const }
         : {}),
@@ -3252,65 +3253,7 @@ function unknownNetworkEffect(
 }
 
 function isInternalAddress(ip: string): boolean {
-  const family = net.isIP(ip);
-  if (family === 4) return isPrivateIPv4(ip);
-  if (family === 6) return isPrivateIPv6(ip);
-  return true;
-}
-
-function isPrivateIPv4(ip: string): boolean {
-  const octets = ip.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part))) {
-    return true;
-  }
-  const [a, b] = octets;
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b! >= 16 && b! <= 31) ||
-    (a === 192 && b === 0 && (octets[2] === 0 || octets[2] === 2)) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b! >= 64 && b! <= 127) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    (a === 198 && b === 51 && octets[2] === 100) ||
-    (a === 203 && b === 0 && octets[2] === 113) ||
-    a! >= 224
-  );
-}
-
-function isPrivateIPv6(ip: string): boolean {
-  const hextets = parseIPv6Hextets(ip);
-  if (!hextets) return true;
-  const allZero = hextets.every((value) => value === 0);
-  const loopback =
-    hextets.slice(0, 7).every((value) => value === 0) && hextets[7] === 1;
-  if (allZero || loopback) return true;
-  // Deprecated IPv4-compatible addresses can otherwise tunnel internal IPv4.
-  if (hextets.slice(0, 6).every((value) => value === 0)) return true;
-  // Reject the local-use NAT64 prefix, and inspect embedded IPv4 in WKP NAT64.
-  if (hextets[0] === 0x64 && hextets[1] === 0xff9b) {
-    if (hextets[2] === 1) return true;
-    if (hextets.slice(2, 6).every((value) => value === 0)) {
-      const embedded = `${hextets[6]! >> 8}.${hextets[6]! & 0xff}.${hextets[7]! >> 8}.${hextets[7]! & 0xff}`;
-      return isPrivateIPv4(embedded);
-    }
-  }
-  if ((hextets[0]! & 0xfe00) === 0xfc00) return true;
-  if ((hextets[0]! & 0xffc0) === 0xfe80) return true;
-  if ((hextets[0]! & 0xff00) === 0xff00) return true;
-  if (hextets[0] === 0x100 && hextets.slice(1, 4).every((v) => v === 0)) {
-    return true;
-  }
-  // Conservatively deny non-global and transition/documentation assignments.
-  if (hextets[0] === 0x2001 && (hextets[1]! & 0xfe00) === 0) return true;
-  if (hextets[0] === 0x2001 && hextets[1] === 0x0db8) return true;
-  if (hextets[0] === 0x2002) return true;
-  if (hextets[0] === 0x3fff && (hextets[1]! & 0xf000) === 0) return true;
-  if (hextets[0] === 0x5f00) return true;
-  const mapped = extractIPv4Mapped(hextets);
-  return mapped ? isPrivateIPv4(mapped) : false;
+  return !isPublicAddress(ip);
 }
 
 function normalizeCeiling(input: unknown): CapabilityCeiling {

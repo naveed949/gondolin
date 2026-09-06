@@ -88,7 +88,7 @@ function fixture(
   const denied: CapabilityEffect[] = [];
   const fixturePolicyVersions = {
     ...policyVersions,
-    ...(network ? { network: "http-tls-mediator/v1" as const } : {}),
+    ...(network ? { network: "http-tls-mediator/v2" as const } : {}),
   };
   if (network) {
     const hooks = capabilityTest.createInvocationHttpHooks({

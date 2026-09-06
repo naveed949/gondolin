@@ -489,15 +489,125 @@ export function applyRedirectRequest(
   };
 }
 
-export function closeSharedDispatchers(backend: QemuNetworkBackend) {
+type HostHttpLifetime = {
+  closed: boolean;
+  controllers: Set<AbortController>;
+  /** Mediator operations and dispatcher destruction awaiting settlement */
+  pending: Set<Promise<void>>;
+  /** Detached dispatcher destruction failures retained until close */
+  errors: unknown[];
+  closing?: Promise<void>;
+};
+
+const hostHttpLifetimes = new WeakMap<QemuNetworkBackend, HostHttpLifetime>();
+
+function hostHttpLifetime(backend: QemuNetworkBackend): HostHttpLifetime {
+  let lifetime = hostHttpLifetimes.get(backend);
+  if (!lifetime) {
+    lifetime = {
+      closed: false,
+      controllers: new Set(),
+      pending: new Set(),
+      errors: [],
+    };
+    hostHttpLifetimes.set(backend, lifetime);
+  }
+  return lifetime;
+}
+
+/** Track the entire mediator operation, including response consumption and hooks */
+export async function runHostHttpOperation<T>(
+  backend: QemuNetworkBackend,
+  controller: AbortController,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const lifetime = hostHttpLifetime(backend);
+  if (lifetime.closed) throw new Error("host HTTP channels are closed");
+  lifetime.controllers.add(controller);
+  let settled!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    settled = resolve;
+  });
+  lifetime.pending.add(pending);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    lifetime.controllers.delete(controller);
+    lifetime.pending.delete(pending);
+    settled();
+  }
+}
+
+function destroyDispatcher(backend: QemuNetworkBackend, dispatcher: Agent) {
+  const lifetime = hostHttpLifetime(backend);
+  // Retain failures even when eviction was initiated by a detached callback.
+  const pending = Promise.resolve()
+    .then(() => dispatcher.destroy())
+    .then(
+      () => {},
+      (error: unknown) => {
+        lifetime.errors.push(error);
+      },
+    );
+  lifetime.pending.add(pending);
+  void pending.then(() => lifetime.pending.delete(pending));
+}
+
+/** Stop new work immediately and confirm bounded host HTTP settlement */
+export function closeSharedDispatchers(
+  backend: QemuNetworkBackend,
+): Promise<void> {
+  const lifetime = hostHttpLifetime(backend);
+  if (lifetime.closing) return lifetime.closing;
+  lifetime.closed = true;
+  for (const controller of lifetime.controllers) {
+    controller.abort(new Error("host HTTP channels are closing"));
+  }
   for (const entry of backend.http.sharedDispatchers.values()) {
-    try {
-      entry.dispatcher.close();
-    } catch {
-      // ignore
-    }
+    destroyDispatcher(backend, entry.dispatcher);
   }
   backend.http.sharedDispatchers.clear();
+  lifetime.closing = (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        (async () => {
+          while (lifetime.pending.size > 0) {
+            await Promise.all([...lifetime.pending]);
+          }
+        })(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("host HTTP settlement timed out")),
+            2000,
+          );
+        }),
+      ]);
+      if (lifetime.errors.length > 0) {
+        throw new AggregateError(
+          lifetime.errors,
+          "host HTTP dispatcher destruction failed",
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  // Socket event handlers cannot await this; subsequent close still observes failure.
+  void lifetime.closing.catch(() => {});
+  return lifetime.closing;
+}
+
+/** Reopen a guest transport only after the previous HTTP generation settled */
+export async function reopenHostHttpChannels(
+  backend: QemuNetworkBackend,
+): Promise<void> {
+  const lifetime = hostHttpLifetime(backend);
+  if (!lifetime.closed) return;
+  await lifetime.closing;
+  if (hostHttpLifetimes.get(backend) === lifetime) {
+    hostHttpLifetimes.delete(backend);
+  }
 }
 
 export function evictSharedDispatcher(
@@ -507,11 +617,7 @@ export function evictSharedDispatcher(
   const entry = backend.http.sharedDispatchers.get(originKey);
   if (!entry) return;
   backend.http.sharedDispatchers.delete(originKey);
-  try {
-    entry.dispatcher.close();
-  } catch {
-    // ignore
-  }
+  destroyDispatcher(backend, entry.dispatcher);
 }
 
 function pruneSharedDispatchers(backend: QemuNetworkBackend, now = Date.now()) {
@@ -544,7 +650,8 @@ export function getCheckedDispatcher(
 ): Agent | null {
   const isIpAllowed = backend.options.httpHooks?.isIpAllowed as
     HttpHooks["isIpAllowed"] | undefined;
-  if (!isIpAllowed) return null;
+  if (hostHttpLifetime(backend).closed)
+    throw new Error("host HTTP channels are closed");
 
   pruneSharedDispatchers(backend);
 
@@ -558,14 +665,16 @@ export function getCheckedDispatcher(
     return cached.dispatcher;
   }
 
-  const lookupFn = createLookupGuard(
-    {
-      hostname: info.hostname,
-      port: info.port,
-      protocol: info.protocol,
-    },
-    isIpAllowed,
-  );
+  const lookupFn = isIpAllowed
+    ? createLookupGuard(
+        {
+          hostname: info.hostname,
+          port: info.port,
+          protocol: info.protocol,
+        },
+        isIpAllowed,
+      )
+    : undefined;
 
   const dispatcher = new Agent({
     connect: { lookup: lookupFn },

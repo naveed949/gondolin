@@ -1,11 +1,19 @@
 # Experimental fork releases
 
-The next prepared fork release is `v0.12.1-adaptivesandbox.3`. It is a GitHub-only,
+The latest published fork release is `v0.12.1-adaptivesandbox.3`. It is a GitHub-only,
 QEMU-only prerelease for adapter development. It is not an AdaptiveSandbox-qualified
 release, and it does not unblock qualified production admission by itself.
-The tag and release are created only after the preparation changes are merged
-and the reviewed main commit passes CI. Existing release `.2` assets and
-consumer pins remain unchanged until `.3` is actually published and verified.
+The network prerequisites now under `Unreleased` are not part of `.3`: stricter
+public-address classification and bounded host HTTP settlement advance the
+network policy to `http-tls-mediator/v2`. They require a new reviewed release
+before consumers can pin their bytes. Package versions and existing `.3` assets
+remain unchanged. Actual peer/TLS observations, response provenance and bounds,
+and independent external teardown acceptance still block AdaptiveSandbox HTTPS
+admission. These changes do not qualify Linux or macOS.
+
+The `.3` commands below document the published release. For a subsequent release,
+first prepare a fresh version consistently across packages, lockfile and changelog;
+never rerun these commands to replace `.3`.
 
 ## Prepare and publish
 

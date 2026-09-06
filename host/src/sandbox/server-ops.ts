@@ -644,7 +644,14 @@ export class SandboxServerOps {
 
     // Tear down host-side network + streams promptly. QEMU may still be running
     // for a short grace period while SandboxController.close() tries SIGTERM.
-    await this.network?.close();
+    let networkCloseFailed = false;
+    let networkCloseError: unknown;
+    try {
+      await this.network?.close();
+    } catch (error) {
+      networkCloseFailed = true;
+      networkCloseError = error;
+    }
 
     for (const stream of this.tcpStreams.values()) {
       stream.destroy();
@@ -662,6 +669,7 @@ export class SandboxServerOps {
     await this.fsService?.close();
 
     this.started = false;
+    if (networkCloseFailed) throw networkCloseError;
   }
 
   attachClient(client: SandboxClient) {

@@ -33,6 +33,7 @@ import {
   parseContentLength,
   applyRedirectRequest,
   evictSharedDispatcher,
+  runHostHttpOperation,
   getCheckedDispatcher,
   getRedirectUrl,
   normalizeLookupEntries,
@@ -133,6 +134,8 @@ export type HttpSession = {
 
   /** whether we already sent an interim 100-continue response */
   sentContinue?: boolean;
+  /** Cancellation of the active host request and response */
+  hostAbortController?: AbortController;
 };
 
 function resetTaintState(
@@ -1270,6 +1273,33 @@ export async function fetchHookRequestAndRespond(
     httpSession: HttpSession;
   },
 ) {
+  const controller = new AbortController();
+  options.httpSession.hostAbortController = controller;
+  try {
+    return await runHostHttpOperation(backend, controller, (signal) =>
+      fetchHookRequestAndRespondInternal(
+        backend,
+        {
+          ...options,
+          write: (chunk) => {
+            signal.throwIfAborted();
+            options.write(chunk);
+          },
+        },
+        signal,
+      ),
+    );
+  } finally {
+    controller.abort();
+    options.httpSession.hostAbortController = undefined;
+  }
+}
+
+async function fetchHookRequestAndRespondInternal(
+  backend: QemuNetworkBackend,
+  options: Parameters<typeof fetchHookRequestAndRespond>[1],
+  signal: AbortSignal,
+) {
   const {
     request: initialRequest,
     httpVersion,
@@ -1302,6 +1332,7 @@ export async function fetchHookRequestAndRespond(
       bodyStream: streamBodyThisHop,
     });
 
+    signal.throwIfAborted();
     if (requestHooked.shortCircuitResponse) {
       const normalized = normalizeHookResponseForGuest(
         requestHooked.shortCircuitResponse,
@@ -1350,9 +1381,11 @@ export async function fetchHookRequestAndRespond(
 
     if (!canSkipFirstHopPolicyChecks) {
       await ensureRequestAllowed(backend, currentRequest);
+      signal.throwIfAborted();
       await ensureIpAllowed(backend, currentUrl, protocol, port);
     }
 
+    signal.throwIfAborted();
     const useDefaultFetch = backend.options.fetch === undefined;
     const originKey = useDefaultFetch
       ? `${protocol}://${currentUrl.hostname}:${port}`
@@ -1379,6 +1412,7 @@ export async function fetchHookRequestAndRespond(
         headers: currentRequest.headers,
         body: bodyInit as any,
         redirect: "manual",
+        signal,
         ...(bodyStream ? { duplex: "half" } : {}),
         ...(dispatcher ? { dispatcher } : {}),
       } as any);
