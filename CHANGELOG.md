@@ -6,7 +6,7 @@ All notable changes to Gondolin are documented here.
 
 ## 0.12.1-adaptivesandbox.6
 
-- Stabilize the exact-writer timeout integration fixture with a bounded ten-second
+- Stabilize the exact-writer failure integration fixtures with a bounded ten-second
   deadline that includes command dispatch. Retain required write observation,
   timeout, unchanged-target, non-publication, and signed-evidence assertions.
   CI requires three consecutive non-skipping runs for both target-existence cases.

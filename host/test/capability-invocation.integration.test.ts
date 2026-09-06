@@ -940,9 +940,9 @@ for (const initiallyExists of [true, false]) {
           },
           limits: {
             outputBytes: scenario.outcome === "output_overflow" ? 4 : 1024,
-            // The deadline includes exec setup; allow the staged write to run
-            // before the timeout case's infinite loop is interrupted in CI.
-            wallTimeMs: scenario.outcome === "timeout" ? 10_000 : 1000,
+            // The deadline includes exec setup; every case must stage a write
+            // before its intended failure. Only the infinite loop uses it all.
+            wallTimeMs: 10_000,
           },
         });
         if (!initiallyExists)

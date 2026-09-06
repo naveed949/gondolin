@@ -12,8 +12,8 @@ macOS.
 
 The `.5` release workflow failed its exact-writer timeout integration test before
 publication; no `.5` release assets were published. Its tag remains at the original
-source commit. `.6` gives that test a bounded ten-second deadline for command
-dispatch and the staged write, retaining every failure-atomicity assertion. CI also
+source commit. `.6` gives each writer failure fixture a bounded ten-second deadline
+for command dispatch and the staged write, retaining every failure-atomicity assertion. CI also
 requires three consecutive non-skipping runs of both timeout cases. Runtime
 enforcement is unchanged.
 
