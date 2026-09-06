@@ -4,6 +4,11 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Keep exact-writer mutations private on command, policy, transport, timeout,
+  output-overflow, and teardown failures, including abort/response races. Handle
+  short staging writes before exact-target publication. This does not qualify
+  multi-target transactions, commit durability, or independent verification.
+
 ## 0.12.1-adaptivesandbox.1
 
 - Fix explicit Zig 0.16 standard-library options types so guest release builds compile.

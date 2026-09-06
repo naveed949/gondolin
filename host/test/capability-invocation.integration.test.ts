@@ -864,3 +864,62 @@ test(
     }
   },
 );
+
+for (const initiallyExists of [true, false]) {
+  for (const scenario of [
+    { outcome: "command_failed", suffix: "false" },
+    { outcome: "output_overflow", suffix: "printf 123456789" },
+    { outcome: "timeout", suffix: "while :; do :; done" },
+    { outcome: "policy_denied", suffix: "read value < /data/output.txt; true" },
+  ]) {
+    test(
+      `public writer discards mutations on ${scenario.outcome}, initially exists=${initiallyExists}`,
+      { skip: shouldSkipVmTests(), timeout: 120_000 },
+      async () => {
+        const target = path.join(
+          tempRoot,
+          `failure-${scenario.outcome}-${initiallyExists}.txt`,
+        );
+        if (initiallyExists) fs.writeFileSync(target, "original");
+        const context = CapabilityInvocationContext.create(
+          writerCeiling([target]),
+          { console: "stdio" },
+        );
+        const request = writerRequest(target, {
+          invocationId: `failure-${scenario.outcome}-${initiallyExists}`,
+          launch: {
+            executable: "/bin/busybox",
+            args: [
+              "sh",
+              "-c",
+              `printf private-result > /data/output.txt; ${scenario.suffix}`,
+            ],
+          },
+          limits: {
+            outputBytes: scenario.outcome === "output_overflow" ? 4 : 1024,
+            wallTimeMs: 1000,
+          },
+        });
+        if (!initiallyExists)
+          request.capabilities.filesystem.operations.push("create");
+        const result = await context.invoke(request);
+        assert.equal(result.outcome, scenario.outcome, result.error);
+        assert.ok(
+          result.evidence.observed.some(
+            (effect) => effect.operation === "write",
+          ),
+        );
+        assert.equal(result.evidence.teardown.vmStopped, true);
+        if (initiallyExists)
+          assert.equal(fs.readFileSync(target, "utf8"), "original");
+        else assert.equal(fs.existsSync(target), false);
+        assert.equal(
+          result.evidence.outputDigest,
+          initiallyExists
+            ? `sha256:${createHash("sha256").update("original").digest("hex")}`
+            : null,
+        );
+      },
+    );
+  }
+}
