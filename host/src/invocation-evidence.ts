@@ -327,6 +327,62 @@ function verifyCapabilityInvocationEvidenceInternal(
   input: unknown,
   options: CapabilityEvidenceVerificationOptions,
 ): CapabilityEvidenceVerification {
+  const checked = verifySignedInvocationEvidence(input, options);
+  if (!isRecord(input)) return checked;
+  const errors = [...checked.errors];
+  const payloadDigest = checked.payloadDigest;
+
+  if (input.schemaVersion !== CAPABILITY_EVIDENCE_SCHEMA_VERSION) {
+    errors.push("unsupported evidence schema version");
+  }
+  if (input.gondolinVersion !== gondolinVersion()) {
+    errors.push("evidence Gondolin version does not match this verifier");
+  }
+  if (input.decision !== "admitted")
+    errors.push("evidence decision is invalid");
+  if (
+    typeof input.outcome !== "string" ||
+    !CAPABILITY_OUTCOMES.has(input.outcome)
+  ) {
+    errors.push("evidence outcome is invalid");
+  }
+
+  const computedQualification = qualificationForEvidence(input);
+  if (input.qualificationId !== computedQualification) {
+    errors.push("runtime and policy qualification identity mismatch");
+  }
+  verifyPublication(input, errors);
+  verifyEffects(input, errors);
+  verifyTeardown(input, errors);
+  return {
+    valid: errors.length === 0,
+    errors,
+    payloadDigest,
+    qualificationId: stringValue(input.qualificationId),
+  };
+}
+
+/** Internal shared signature and expected binding verification for versioned profiles */
+export function verifySignedInvocationEvidence(
+  input: unknown,
+  options: CapabilityEvidenceVerificationOptions,
+): CapabilityEvidenceVerification {
+  try {
+    return verifySignedInvocationEvidenceInternal(input, options);
+  } catch {
+    return {
+      valid: false,
+      errors: ["malformed signed invocation evidence"],
+      payloadDigest: null,
+      qualificationId: null,
+    };
+  }
+}
+
+function verifySignedInvocationEvidenceInternal(
+  input: unknown,
+  options: CapabilityEvidenceVerificationOptions,
+): CapabilityEvidenceVerification {
   const errors: string[] = [];
   if (!isRecord(input)) {
     return {
@@ -431,28 +487,6 @@ function verifyCapabilityInvocationEvidenceInternal(
     options.publicKey ?? signer.publicKey,
   );
 
-  if (input.schemaVersion !== CAPABILITY_EVIDENCE_SCHEMA_VERSION) {
-    errors.push("unsupported evidence schema version");
-  }
-  if (input.gondolinVersion !== gondolinVersion()) {
-    errors.push("evidence Gondolin version does not match this verifier");
-  }
-  if (input.decision !== "admitted")
-    errors.push("evidence decision is invalid");
-  if (
-    typeof input.outcome !== "string" ||
-    !CAPABILITY_OUTCOMES.has(input.outcome)
-  ) {
-    errors.push("evidence outcome is invalid");
-  }
-
-  const computedQualification = qualificationForEvidence(input);
-  if (input.qualificationId !== computedQualification) {
-    errors.push("runtime and policy qualification identity mismatch");
-  }
-  verifyPublication(input, errors);
-  verifyEffects(input, errors);
-  verifyTeardown(input, errors);
   return {
     valid: errors.length === 0,
     errors,

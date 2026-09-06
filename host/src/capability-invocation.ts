@@ -724,16 +724,19 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
   schemaVersion: CAPABILITY_FEATURE_SCHEMA_VERSION,
   requestSchemas: {
     [CAPABILITY_INVOCATION_SCHEMA_VERSION]: "active",
+    "gondolin.https-request/v1": "active",
     "future-schema": "unsupported",
   },
   evidenceSchemas: {
     [CAPABILITY_EVIDENCE_SCHEMA_VERSION]: "active",
+    "gondolin.https-evidence/v1": "active",
     "gondolin.capability-evidence/v1": "unsupported",
     "gondolin.capability-evidence/v2": "unsupported",
     "future-schema": "unsupported",
   },
   profiles: {
     "exact-reader": "active",
+    "https-request": "active",
     "exact-reader.http-tls-credentials": "active",
     "exact-writer": "active",
     "scoped-runner": "active",
@@ -800,6 +803,8 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "filesystem.link": "unsupported",
     "filesystem.execute": "unsupported",
     "network.none": "active",
+    "network.https.one-request-get-head": "active",
+    "network.https.host-response-binding": "active",
     "network.http1": "active",
     "network.tls-http1": "active",
     "network.redirect.reauthorized": "active",

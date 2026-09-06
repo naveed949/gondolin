@@ -1,3 +1,4 @@
+import type { HttpsObservation } from "../http/https-observation.ts";
 import type { DebugLogFn } from "../debug.ts";
 import type { DnsOptions, HttpFetch, HttpHooks } from "../qemu/contracts.ts";
 import type { SshOptions } from "../qemu/ssh.ts";
@@ -36,6 +37,8 @@ export type VMOptions = {
   fetch?: HttpFetch;
   /** http interception hooks */
   httpHooks?: HttpHooks;
+  /** Internal dedicated HTTPS controller observation */
+  httpsObservation?: HttpsObservation;
 
   /** dns configuration */
   dns?: DnsOptions;

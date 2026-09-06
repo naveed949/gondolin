@@ -1,3 +1,4 @@
+import type { HttpsObservation } from "../http/https-observation.ts";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -149,6 +150,8 @@ export type SandboxServerOptions = {
   fetch?: HttpFetch;
   /** http interception hooks */
   httpHooks?: HttpHooks;
+  /** Internal dedicated HTTPS controller observation */
+  httpsObservation?: HttpsObservation;
 
   /** dns configuration */
   dns?: DnsOptions;
@@ -245,6 +248,8 @@ export type ResolvedSandboxServerOptions = {
   fetch?: HttpFetch;
   /** http interception hooks */
   httpHooks?: HttpHooks;
+  /** Internal dedicated HTTPS controller observation */
+  httpsObservation?: HttpsObservation;
 
   /** dns configuration */
   dns?: DnsOptions;
@@ -1042,6 +1047,7 @@ export function resolveSandboxServerOptions(
       options.maxHttpResponseBodyBytes ?? DEFAULT_MAX_HTTP_RESPONSE_BODY_BYTES,
     fetch: options.fetch,
     httpHooks: options.httpHooks,
+    httpsObservation: options.httpsObservation,
     dns: options.dns,
     ssh: options.ssh,
     tcp: options.tcp,

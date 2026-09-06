@@ -712,3 +712,55 @@ claim because AdaptiveSandbox has not released a bundle to qualify.
 See [scoped resource prerequisites](scoped-resource-prerequisites.md) for CPU
 observer failure semantics and the remaining tree-authority, resource, and
 independent teardown gaps before AdaptiveSandbox qualification.
+
+## Experimental credential-free HTTPS profile
+
+`HttpsInvocationContext` is a separate one-use controller with request schema
+`gondolin.https-request/v1`, ceiling schema `gondolin.https-ceiling/v1`, and signed
+`gondolin.https-evidence/v1` evidence. Its profile is `https-request`; existing
+exact-reader/writer request and evidence schema versions retain their meanings.
+The profile admits only exact ASCII DNS HTTPS origins, GET/HEAD, no redirects,
+public addresses, and explicit positive response-byte and request-time bounds.
+All authority comes from the request and immutable correlated ceiling. Unknown
+fields, filesystem grants, credentials, bodies, arbitrary headers, executable
+options, alternate TLS trust, custom fetch/proxy options and unsafe process TLS
+configuration deny. Runtime combinations remain unqualified.
+
+Each invocation uses a fresh disposable QEMU VM, an empty caller filesystem,
+a fixed image curl executable, clean environment and inherited exact executable
+and descendant confinement. Image libraries and the mediator CA are runtime
+infrastructure, not a grant to read caller files. Canonical request URL identity
+binds the serialized path/query actually transmitted; origin authority does not
+become a path permission.
+
+Response status and canonical base64 body come from the host mediator, not guest
+stdout. `maxResponseBytes` bounds decoded response entity bytes before complete
+buffering; it is not wire-byte accounting or a complete memory bound. `timeoutMs`
+covers mediation from request admission, separately from VM startup and command
+wall time. Host evidence records actual connected peer/TLS verification, response
+status/body digest/bytes, deadline observations and awaited transport teardown.
+A failure may follow a real remote request; no rollback or retry is implied.
+`verifyHttpsInvocationResult` requires externally expected request, ceiling,
+runtime and qualification bindings and supports retained signer material.
+Process-local teardown state is not independent external teardown evidence.
+
+The required source CI development smoke uses public HTTPS `example.com` for
+GET/HEAD and failure bounds. Its tests fail in CI when VM acceleration, image
+curl or public TLS cannot execute. This is third-party development integration,
+not controlled external acceptance: owned TLS/DNS endpoints and independent
+request/connection logs are still required for qualification and hostile
+ordinary AdaptiveSandbox Invocation Gateway acceptance. Linux does not qualify
+macOS. Native AdaptiveSandbox default and qualified allowlists are unaffected.
+
+The fixed launcher writes transfer output to a bounded discard stdout sink;
+`/dev/null` is unavailable under the unchanged device isolation policy. GET
+transfer bytes are capped by `maxResponseBytes`; HEAD's protocol headers are
+discarded under a separate fixed 64 KiB runtime cap. Neither stream becomes
+public diagnostics or response evidence. Stderr diagnostics remain constrained
+by `outputBytes`, including valid UTF-8 rendering of malformed guest bytes.
+The launcher uses a fixed guest-only synthetic bridge address with curl
+`--resolve`, avoiding a guest resolver thread while descendants stay denied.
+The original hostname remains in URL, SNI and Host; the host connector separately
+resolves and checks the actual public upstream address and TLS identity. The
+guest bridge address is neither an upstream address observation nor additional
+canonical network authority.

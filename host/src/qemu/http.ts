@@ -35,6 +35,7 @@ import {
   evictSharedDispatcher,
   runHostHttpOperation,
   getCheckedDispatcher,
+  createHttpsDispatcher,
   getRedirectUrl,
   normalizeLookupEntries,
   sendHttpResponse,
@@ -1274,6 +1275,22 @@ export async function fetchHookRequestAndRespond(
   },
 ) {
   const controller = new AbortController();
+  const observation = backend.options.httpsObservation;
+  if (observation) {
+    observation.begin(
+      options.request.url,
+      options.request.method,
+      Boolean(
+        options.request.body?.length ||
+        options.initialBodyStreamHasBody ||
+        options.initialBodyStream,
+      ),
+    );
+  }
+  const abortObservation = () => controller.abort(observation?.signal.reason);
+  observation?.signal.addEventListener("abort", abortObservation, {
+    once: true,
+  });
   options.httpSession.hostAbortController = controller;
   try {
     return await runHostHttpOperation(backend, controller, (signal) =>
@@ -1289,7 +1306,12 @@ export async function fetchHookRequestAndRespond(
         signal,
       ),
     );
+  } catch (error) {
+    observation?.fail("transport_failure");
+    throw error;
   } finally {
+    observation?.signal.removeEventListener("abort", abortObservation);
+    observation?.finish();
     controller.abort();
     options.httpSession.hostAbortController = undefined;
   }
@@ -1310,6 +1332,10 @@ async function fetchHookRequestAndRespondInternal(
     initialBodyStreamHasBody = Boolean(initialBodyStream),
     httpSession,
   } = options;
+
+  if (backend.options.httpsObservation) {
+    return fetchObservedHttpsAndRespond(backend, options, signal);
+  }
 
   const fetcher = backend.options.fetch ?? undiciFetch;
 
@@ -1721,6 +1747,129 @@ async function fetchHookRequestAndRespondInternal(
   }
 }
 
+/** Dedicated profile bypasses all request/response rewriting and synthetic fetches. */
+async function fetchObservedHttpsAndRespond(
+  backend: QemuNetworkBackend,
+  options: Parameters<typeof fetchHookRequestAndRespond>[1],
+  signal: AbortSignal,
+): Promise<void> {
+  const observation = backend.options.httpsObservation!;
+  if (
+    backend.options.fetch ||
+    backend.options.httpHooks?.onRequest ||
+    backend.options.httpHooks?.onResponse
+  ) {
+    observation.fail("request_denied");
+    throw new Error(
+      "HTTPS observation forbids transport replacement and rewrite hooks",
+    );
+  }
+  const request = options.request;
+  const url = new URL(request.url);
+  const port = Number(url.port || 443);
+  await awaitHttpDeadline(ensureRequestAllowed(backend, request), signal);
+  await awaitHttpDeadline(ensureIpAllowed(backend, url, "https", port), signal);
+  observation.assertPending();
+  const dispatcher = createHttpsDispatcher(
+    backend,
+    { hostname: url.hostname, port, protocol: "https" },
+    observation,
+  );
+  const response = await undiciFetch(url.href, {
+    method: observation.policy.method,
+    // Guest headers cannot smuggle credentials, ranges, proxy state or request bodies.
+    headers: { accept: "*/*", connection: "close" },
+    redirect: "manual",
+    signal,
+    dispatcher,
+  });
+  observation.assertPending();
+  // Deny every redirect status, including redirects lacking a Location header.
+  if ([301, 302, 303, 307, 308].includes(response.status)) {
+    observation.fail("redirect_denied");
+    await response.body?.cancel();
+    throw new Error("HTTPS redirects are not authorized");
+  }
+  const suppressBody =
+    observation.policy.method === "HEAD" ||
+    [204, 205, 304].includes(response.status);
+  const body = await consumeObservedHttpsBody(
+    response,
+    observation,
+    signal,
+    suppressBody,
+  );
+  observation.complete(response.status, body);
+  const headers = stripHopByHopHeaders(
+    responseHeadersToRecord(response.headers),
+  );
+  delete headers["content-encoding"];
+  delete headers["transfer-encoding"];
+  headers["content-length"] = body.length.toString();
+  headers["connection"] = "close";
+  sendHttpResponse(
+    options.write,
+    {
+      status: response.status,
+      statusText: response.statusText || "OK",
+      headers,
+      body,
+    },
+    options.httpVersion,
+  );
+}
+
+/** Cancellation races non-cancellable DNS promises without permitting late connects. */
+async function awaitHttpDeadline<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  signal.throwIfAborted();
+  let abort!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
+/** Decoded entity bytes are bounded before accumulation; incomplete entities have no digest. */
+export async function consumeObservedHttpsBody(
+  response: Pick<FetchResponse, "body">,
+  observation: import("../http/https-observation.ts").HttpsObservation,
+  signal: AbortSignal,
+  suppressBody = false,
+): Promise<Buffer> {
+  if (suppressBody) {
+    if (response.body) await response.body.cancel();
+    observation.assertPending();
+    return Buffer.alloc(0);
+  }
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  try {
+    while (true) {
+      const next = await awaitHttpDeadline(reader.read(), signal);
+      observation.assertPending();
+      if (next.done) break;
+      observation.received(next.value.byteLength);
+      chunks.push(Buffer.from(next.value));
+    }
+    return Buffer.concat(chunks);
+  } catch (error) {
+    observation.fail("transport_failure");
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function handleWebSocketUpgrade(
   backend: QemuNetworkBackend,
   key: string,
@@ -1739,6 +1888,12 @@ async function handleWebSocketUpgrade(
     policyPrechecked: boolean;
   },
 ): Promise<boolean> {
+  if (backend.options.httpsObservation) {
+    backend.options.httpsObservation.fail("request_denied");
+    throw new HttpRequestBlockedError(
+      "HTTPS invocation forbids websocket upgrades",
+    );
+  }
   if (request.version !== "HTTP/1.1") {
     throw new HttpRequestBlockedError(
       "websocket upgrade requires HTTP/1.1",
@@ -2072,6 +2227,7 @@ function hasPolicyRelevantRequestHeadChange(
 }
 
 function shouldPrecheckRequestPolicies(backend: QemuNetworkBackend): boolean {
+  if (backend.options.httpsObservation) return false;
   const onRequest = backend.options.httpHooks?.onRequest;
   if (!onRequest) {
     return true;

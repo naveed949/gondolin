@@ -2,6 +2,8 @@ import net from "net";
 import dns from "dns";
 import { Agent } from "undici";
 import forge from "node-forge";
+import { randomUUID } from "node:crypto";
+import { createValidatedHttpsConnector, type HttpsConnectorObservation } from "./https-connector.ts";
 
 import type {
   HttpHooks,
@@ -638,6 +640,36 @@ function evictSharedDispatchersIfNeeded(backend: QemuNetworkBackend) {
     if (!oldestKey) break;
     evictSharedDispatcher(backend, oldestKey);
   }
+}
+
+/** Fresh, single-attempt HTTPS dispatcher retained by the awaited channel registry */
+export function createHttpsDispatcher(
+  backend: QemuNetworkBackend,
+  info: { hostname: string; port: number; protocol: "http" | "https" },
+  observation: HttpsConnectorObservation,
+): Agent {
+  if (hostHttpLifetime(backend).closed) throw new Error("host HTTP channels are closed");
+  const dispatcher = new Agent({
+    connect: createValidatedHttpsConnector(info, observation),
+    connections: 1,
+    pipelining: 0,
+    maxRequestsPerClient: 1,
+  });
+  let dispatched = false;
+  const dispatch = dispatcher.dispatch.bind(dispatcher);
+  dispatcher.dispatch = (options, handler) => {
+    if (dispatched || observation.signal.aborted) {
+      observation.fail("request_denied");
+      handler.onError?.(new Error("HTTPS profile permits one upstream request"));
+      return false;
+    }
+    dispatched = true;
+    return dispatch(options, handler);
+  };
+  backend.http.sharedDispatchers.set(`https-once:${randomUUID()}`, {
+    dispatcher, lastUsedAt: Date.now(),
+  });
+  return dispatcher;
 }
 
 export function getCheckedDispatcher(
