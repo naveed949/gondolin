@@ -405,6 +405,14 @@ jobs:
           GONDOLIN_GUEST_DIR: ${{ github.workspace }}/guest/image/out
           GONDOLIN_DEBUG: "exec,protocol,vfs"
 
+      - name: Require dedicated HTTPS VM development evidence
+        timeout-minutes: 5
+        run: node --test host/test/https-invocation.integration.test.ts
+        env:
+          CI: "true"
+          GONDOLIN_FORCE_VM_TESTS: "1"
+          GONDOLIN_GUEST_DIR: ${{ github.workspace }}/guest/image/out
+
       - name: Run tests
         # Run guest + host tests sequentially to avoid running multiple QEMU instances
         # concurrently (which can hang/time out on some CI runners).

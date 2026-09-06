@@ -1,3 +1,4 @@
+import type { HttpsObservation } from "../http/https-observation.ts";
 import type dns from "dns";
 import type net from "net";
 import type tls from "tls";
@@ -172,6 +173,8 @@ export type QemuNetworkBackend<
     debug?: boolean;
     fetch?: HttpFetch;
     httpHooks?: HttpHooks;
+    /** Internal dedicated HTTPS invocation observation */
+    httpsObservation?: HttpsObservation;
     dnsLookup?: (
       hostname: string,
       options: dns.LookupAllOptions,

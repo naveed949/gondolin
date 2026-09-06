@@ -346,6 +346,9 @@ export class VM {
     ) {
       sandboxOptions.maxHttpBodyBytes = options.maxHttpBodyBytes;
     }
+    if (options.httpsObservation !== undefined) {
+      sandboxOptions.httpsObservation = options.httpsObservation;
+    }
     if (
       options.maxHttpResponseBodyBytes !== undefined &&
       (sandboxOptions as any).maxHttpResponseBodyBytes === undefined
@@ -491,6 +494,9 @@ export class VM {
       sandboxOptions.maxHttpBodyBytes === undefined
     ) {
       sandboxOptions.maxHttpBodyBytes = options.maxHttpBodyBytes;
+    }
+    if (options.httpsObservation !== undefined) {
+      sandboxOptions.httpsObservation = options.httpsObservation;
     }
     if (
       options.maxHttpResponseBodyBytes !== undefined &&

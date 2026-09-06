@@ -1,3 +1,4 @@
+import type { HttpsObservation } from "../http/https-observation.ts";
 import { EventEmitter } from "events";
 import { stripTrailingNewline } from "../debug.ts";
 import net from "net";
@@ -273,6 +274,8 @@ export type QemuNetworkOptions = {
   fetch?: HttpFetch;
   /** http interception hooks */
   httpHooks?: HttpHooks;
+  /** Internal dedicated HTTPS controller observation */
+  httpsObservation?: HttpsObservation;
   /** mitm ca directory path */
   mitmCertDir?: string;
   /** max intercepted http request body size in `bytes` */

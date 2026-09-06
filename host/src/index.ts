@@ -337,3 +337,18 @@ export {
 } from "./build/index.ts";
 
 export type { ExactWriterPublication } from "./capability-filesystem.ts";
+
+export {
+  HttpsInvocationContext,
+  canonicalizeHttpsInvocationRequest,
+  verifyHttpsInvocationResult,
+  HTTPS_REQUEST_SCHEMA_VERSION,
+  HTTPS_CEILING_SCHEMA_VERSION,
+  HTTPS_EVIDENCE_SCHEMA_VERSION,
+  HTTPS_POLICY_VERSIONS,
+  type HttpsInvocationRequest,
+  type HttpsInvocationCeiling,
+  type HttpsInvocationResult,
+  type HttpsInvocationEvidence,
+  type HttpsInvocationRuntimeOptions,
+} from "./https-invocation.ts";

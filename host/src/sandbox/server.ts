@@ -490,6 +490,7 @@ export class SandboxServer extends EventEmitter {
           debug: this.hasDebug("net"),
           fetch: this.options.fetch,
           httpHooks: this.options.httpHooks,
+          httpsObservation: this.options.httpsObservation,
           dns: this.options.dns,
           ssh: this.options.ssh,
           tcp: this.options.tcp,
