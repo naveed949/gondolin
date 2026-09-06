@@ -322,7 +322,15 @@ test(
       `${first.error ?? ""}\n${first.stderr}`,
     );
     assert.equal(fs.readFileSync(firstTarget, "utf8"), "writer-data");
-    assert.equal(fs.readFileSync(secondTarget, "utf8"), "second-data");
+    assert.equal(second.outcome, "policy_denied", second.error);
+    assert.equal(fs.readFileSync(secondTarget, "utf8"), "second-before\n");
+    assert.ok(
+      second.evidence.observed.some((effect) => effect.operation === "write"),
+    );
+    assert.equal(
+      second.evidence.outputDigest,
+      `sha256:${createHash("sha256").update("second-before\n").digest("hex")}`,
+    );
     assert.equal(fs.readFileSync(unrelated, "utf8"), "unrelated-before\n");
     assert.notEqual(
       first.evidence.requestDigest,
@@ -354,6 +362,37 @@ test(
       first.evidence.outputDigest,
       `sha256:${createHash("sha256").update("writer-data").digest("hex")}`,
     );
+
+    // A denied invocation keeps the target pin intact. A fresh invocation may
+    // still publish authorized changes to that distinct target successfully.
+    const secondSuccessful = await context.invoke(
+      writerRequest(secondTarget, {
+        invocationId: "writer-2-successful-retry",
+        launch: {
+          executable: "/bin/busybox",
+          args: ["sh", "-c", "printf second-data > /data/output.txt"],
+        },
+      }),
+    );
+    assert.equal(secondSuccessful.outcome, "success", secondSuccessful.error);
+    assert.equal(fs.readFileSync(secondTarget, "utf8"), "second-data");
+    assert.equal(fs.readFileSync(firstTarget, "utf8"), "writer-data");
+    assert.equal(fs.readFileSync(unrelated, "utf8"), "unrelated-before\n");
+    assert.equal(secondSuccessful.evidence.denied.length, 0);
+    assert.equal(
+      secondSuccessful.evidence.inputDigest,
+      second.evidence.outputDigest,
+    );
+    assert.equal(
+      secondSuccessful.evidence.outputDigest,
+      `sha256:${createHash("sha256").update("second-data").digest("hex")}`,
+    );
+    assert.notEqual(
+      secondSuccessful.evidence.executionId,
+      second.evidence.executionId,
+    );
+    assert.notEqual(secondSuccessful.evidence.vmId, second.evidence.vmId);
+    assert.equal(secondSuccessful.evidence.teardown.vmStopped, true);
 
     const created = await context.invoke(
       writerRequest(createdTarget, {
@@ -479,6 +518,8 @@ test(
           effect.guestPath === "/data/alias.txt",
       ),
     );
+
+    assert.equal(fs.readFileSync(firstTarget, "utf8"), "writer-data");
 
     const truncated = await context.invoke(
       writerRequest(firstTarget, {
