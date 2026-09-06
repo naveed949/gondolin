@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -306,8 +307,23 @@ test(
 
       assert.equal(results[0]!.stdout, "reader-a-only\n");
       assert.equal(results[1]!.stdout, "reader-b-only\n");
-      assert.equal(fs.readFileSync(writerA, "utf8"), "writer-a-after");
+      assert.equal(results[2]!.outcome, "policy_denied", results[2]!.error);
+      assert.equal(fs.readFileSync(writerA, "utf8"), "writer-a-before\n");
+      assert.ok(
+        results[2]!.evidence.observed.some(
+          (effect) => effect.operation === "write",
+        ),
+      );
+      assert.equal(
+        results[2]!.evidence.outputDigest,
+        `sha256:${createHash("sha256").update("writer-a-before\n").digest("hex")}`,
+      );
+      assert.equal(results[3]!.outcome, "success", results[3]!.error);
       assert.equal(fs.readFileSync(writerB, "utf8"), "writer-b-after");
+      assert.equal(
+        results[3]!.evidence.outputDigest,
+        `sha256:${createHash("sha256").update("writer-b-after").digest("hex")}`,
+      );
       assert.equal(results[4]!.stdout, "runner-a:runner-only");
       assert.equal(results[5]!.stdout, "credential-ok\n");
       assert.deepEqual(credentialsSeen, ["credential-a-secret"]);

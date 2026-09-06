@@ -434,7 +434,8 @@ still-empty new output is part of creation; truncation after writing content
 requires explicit `truncate` authority. Landlock grants write access to only the
 prepared file inode, never its parent. Host hooks deny reads and every non-target
 or unsupported operation.
-Only after the disposable VM has stopped is the private result copied to a
+Only after execution succeeds without a policy denial, timeout, or output
+overflow and the disposable VM has stopped is the private result copied to a
 private staging inode in the pinned parent and atomically published at the exact
 target path. The original inode is never mutated during publication, so a
 concurrently created hard-link alias retains the original bytes. Creating an
@@ -446,7 +447,20 @@ explicitly. For an existing target it preserves owner, group, and permission
 bits, but intentionally publishes a new inode; ACLs, extended attributes, inode
 flags, and timestamps are not preserved. A target whose parent cannot support
 that publication is rejected with the distinct `commit_failure` outcome; it is
-never reported as a successful invocation.
+never reported as a successful invocation. Command, policy, transport, limit,
+and teardown failures discard private mutations without publishing or restoring
+host bytes. On these failures `outputDigest` remains the digest of the initial
+snapshot (or `null` for an initially absent target); observed filesystem effects
+still describe private guest mutations, not proof of host publication.
+
+This is a single exact-target publication rule, not a multi-target transaction,
+crash-durable commit, or independent external-effects/teardown verification.
+An error after atomic publication (including metadata validation, staging cleanup,
+or evidence sealing) can still leave changed host bytes despite a failed or
+missing result. A `commit_failure` therefore does not promise an unchanged target.
+External host namespace changes and post-publication filesystem errors remain
+outside a fully qualified failure-atomic transaction guarantee. No qualification
+allowlist or runtime guarantee is promoted by this change.
 
 Writer evidence keeps requested, granted, attempted, denied, and observed
 effects separate, identifies resources by digest without recording content,
@@ -632,3 +646,7 @@ See [AdaptiveSandbox Conformance](adaptivesandbox-conformance.md) for the
 released-artifact pin, public-seam adapter, compatibility matrix, required
 negative fixtures, and reporting rules. The current matrix makes no conformance
 claim because AdaptiveSandbox has not released a bundle to qualify.
+
+See [scoped resource prerequisites](scoped-resource-prerequisites.md) for CPU
+observer failure semantics and the remaining tree-authority, resource, and
+independent teardown gaps before AdaptiveSandbox qualification.

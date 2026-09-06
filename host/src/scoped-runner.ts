@@ -340,8 +340,8 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
   limits: ScopedRunnerInvocationRequest["limits"];
   /** Resource usage measurements */
   usage: {
-    /** Host-observed QEMU CPU time since invocation dispatch in `ms` */
-    cpuTimeMs: number;
+    /** Last host-observed QEMU CPU lower bound in `ms`, or `null` if unavailable */
+    cpuTimeMs: number | null;
     /** Guest-cgroup peak complete-tree memory in `bytes` */
     memoryPeakBytes: number;
     /** Guest-cgroup peak simultaneous process-tree members */
@@ -361,7 +361,7 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
   /** Trust source for each usage measurement */
   observations: {
     /** CPU accounting source */
-    cpu: "host-qemu-process";
+    cpu: "host-qemu-process" | "host-qemu-process-incomplete" | "unavailable";
     /** Memory accounting source */
     memory: "guest-reported-cgroup-v2";
     /** Process accounting source */
@@ -628,6 +628,7 @@ export class ScopedRunnerInvocationContext {
     let cpuTimer: NodeJS.Timeout | null = null;
     let cpuObserver: HostCpuObserver | null = null;
     let hostCpuExhausted = false;
+    let cpuObservationFailed = false;
     let guestUsage: import("./exec.ts").ExecResourceUsage | undefined;
     let commandDispatched = false;
 
@@ -699,8 +700,13 @@ export class ScopedRunnerInvocationContext {
       timer.unref?.();
       cpuTimer = setInterval(() => {
         if (!cpuObserver) return;
-        if (cpuObserver.elapsedMs() >= request.limits.cpuTimeMs) {
-          hostCpuExhausted = true;
+        try {
+          if (cpuObserver.sampleElapsedMs() >= request.limits.cpuTimeMs) {
+            hostCpuExhausted = true;
+            abort.abort();
+          }
+        } catch {
+          cpuObservationFailed = true;
           abort.abort();
         }
       }, 10);
@@ -859,6 +865,17 @@ export class ScopedRunnerInvocationContext {
       if (timer) clearTimeout(timer);
       if (cpuTimer) clearInterval(cpuTimer);
       options.signal?.removeEventListener("abort", onCancel);
+      // Sample while the admitted QEMU identity still exists, before closing it.
+      // A lost observer cannot silently freeze the enforcement counter.
+      if (cpuObserver && !cpuObservationFailed) {
+        try {
+          if (cpuObserver.sampleElapsedMs() >= request.limits.cpuTimeMs) {
+            hostCpuExhausted = true;
+          }
+        } catch {
+          cpuObservationFailed = true;
+        }
+      }
       if (vm) {
         runnerPid ??= vm.getHostPid();
         try {
@@ -878,6 +895,18 @@ export class ScopedRunnerInvocationContext {
       identity.finish("revoked", true);
       throw admissionError;
     }
+    if (cpuObservationFailed) {
+      const observationError = "host QEMU CPU accounting became unavailable or changed identity";
+      processEvents.push(lifecycleEvent(identity, "policy", observationError));
+      // Preserve an independently known crash, cancellation, timeout, or resource
+      // outcome: losing /proc after that failure is not evidence of its cause.
+      if (outcome === "success" || outcome === "transport_failure" || outcome === "host_controller_failure") {
+        outcome = "host_controller_failure";
+        error = observationError;
+      }
+    } else if (hostCpuExhausted && outcome === "success") {
+      outcome = "cpu_exhausted";
+    }
     if (!teardownComplete) {
       outcome = "teardown_failure";
       error = closeError
@@ -896,12 +925,12 @@ export class ScopedRunnerInvocationContext {
       Math.ceil(performance.now() - startedMonotonic),
     );
     const exhausted = outcomeToExhausted(outcome);
-    const hostCpuTimeMs = Math.ceil(
-      cpuObserver?.elapsedMs() ?? guestUsage?.cpuTimeMs ?? 0,
-    );
+    const hostCpuTimeMs = cpuObserver === null
+      ? null
+      : Math.ceil(cpuObserver.elapsedMs());
     const hostCpuConfirmed =
       hostCpuExhausted ||
-      (cpuObserver !== null && hostCpuTimeMs >= request.limits.cpuTimeMs);
+      (hostCpuTimeMs !== null && hostCpuTimeMs >= request.limits.cpuTimeMs);
     const resourceAccounting: ScopedRunnerResourceAccounting = {
       ...identity.authenticate(),
       limits: request.limits,
@@ -920,7 +949,11 @@ export class ScopedRunnerInvocationContext {
         hostCpuConfirmed,
       ),
       observations: {
-        cpu: "host-qemu-process",
+        cpu: cpuObserver === null
+          ? "unavailable"
+          : cpuObservationFailed
+            ? "host-qemu-process-incomplete"
+            : "host-qemu-process",
         memory: "guest-reported-cgroup-v2",
         pids: "guest-reported-cgroup-v2",
         storage: "host-vfs",
@@ -1063,17 +1096,24 @@ class WritableStorageBudget {
   }
 }
 
-class HostCpuObserver {
-  private readonly pid: number;
-  private readonly ticksPerSecond: number;
-  private readonly baselineMs: number;
-  private lastMs: number;
+type LinuxProcessCpuSample = {
+  cpuMs: number;
+  /** Linux process start time in clock ticks, retained without numeric coercion */
+  startTicks: string;
+};
 
-  private constructor(pid: number, ticksPerSecond: number, baselineMs: number) {
-    this.pid = pid;
-    this.ticksPerSecond = ticksPerSecond;
-    this.baselineMs = baselineMs;
-    this.lastMs = baselineMs;
+class HostCpuObserver {
+  private readonly readSample: () => LinuxProcessCpuSample | null;
+  private readonly baseline: LinuxProcessCpuSample;
+  private lastMs: number;
+  private failed = false;
+
+  constructor(readSample: () => LinuxProcessCpuSample | null) {
+    this.readSample = readSample;
+    const baseline = readSample();
+    if (baseline === null) throw new Error("QEMU process CPU accounting is unavailable");
+    this.baseline = baseline;
+    this.lastMs = baseline.cpuMs;
   }
 
   static create(pid: number): HostCpuObserver {
@@ -1083,35 +1123,36 @@ class HostCpuObserver {
         `host-observed QEMU CPU accounting is unsupported on ${process.platform}`,
       );
     }
-    let ticksPerSecond: number;
     try {
-      ticksPerSecond = Number(
+      const ticksPerSecond = Number(
         execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).trim(),
       );
+      if (!Number.isSafeInteger(ticksPerSecond) || ticksPerSecond <= 0)
+        throw new Error("host clock-tick accounting controller is degraded");
+      return new HostCpuObserver(() => readLinuxProcessCpuSample(pid, ticksPerSecond));
     } catch {
       throw new CapabilityAdmissionError(
         "unsupported",
-        "host clock-tick accounting controller is unavailable",
+        "host QEMU CPU accounting controller is unavailable or degraded",
       );
     }
-    if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
-      throw new CapabilityAdmissionError(
-        "unsupported",
-        "host clock-tick accounting controller is degraded",
-      );
-    const baseline = readLinuxProcessCpuMs(pid, ticksPerSecond);
-    if (baseline === null)
-      throw new CapabilityAdmissionError(
-        "unsupported",
-        "QEMU process CPU accounting is unavailable",
-      );
-    return new HostCpuObserver(pid, ticksPerSecond, baseline);
   }
 
+  sampleElapsedMs(): number {
+    const current = this.readSample();
+    if (this.failed || current === null ||
+        current.startTicks !== this.baseline.startTicks ||
+        current.cpuMs < this.lastMs) {
+      this.failed = true;
+      throw new Error("QEMU process CPU accounting became unavailable or changed identity");
+    }
+    this.lastMs = current.cpuMs;
+    return this.elapsedMs();
+  }
+
+  /** Last validated sample, without querying a terminated or reused PID */
   elapsedMs(): number {
-    const current = readLinuxProcessCpuMs(this.pid, this.ticksPerSecond);
-    if (current !== null) this.lastMs = current;
-    return Math.max(0, this.lastMs - this.baselineMs);
+    return this.lastMs - this.baseline.cpuMs;
   }
 }
 
@@ -1873,26 +1914,29 @@ function withoutAuthentication<T extends AuthenticatedEvidenceEvent>(
 
 const MEBIBYTE = 1024 * 1024;
 
-function readLinuxProcessCpuMs(
+function readLinuxProcessCpuSample(
   pid: number,
   ticksPerSecond: number,
-): number | null {
+): LinuxProcessCpuSample | null {
   try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const closingParen = stat.lastIndexOf(")");
-    if (closingParen < 0) return null;
-    const fields = stat
-      .slice(closingParen + 2)
-      .trim()
-      .split(/\s+/);
-    const userTicks = Number(fields[11]);
-    const systemTicks = Number(fields[12]);
-    if (!Number.isFinite(userTicks) || !Number.isFinite(systemTicks))
-      return null;
-    return ((userTicks + systemTicks) * 1000) / ticksPerSecond;
+    return parseLinuxProcessCpuStat(fs.readFileSync(`/proc/${pid}/stat`, "utf8"), ticksPerSecond);
   } catch {
     return null;
   }
+}
+
+function parseLinuxProcessCpuStat(stat: string, ticksPerSecond: number): LinuxProcessCpuSample | null {
+  if (!Number.isSafeInteger(ticksPerSecond) || ticksPerSecond <= 0) return null;
+  const closingParen = stat.lastIndexOf(")");
+  if (closingParen < 0) return null;
+  const fields = stat.slice(closingParen + 2).trim().split(/\s+/);
+  const user = fields[11];
+  const system = fields[12];
+  const startTicks = fields[19];
+  if (![user, system, startTicks].every(value => value !== undefined && /^(0|[1-9][0-9]*)$/.test(value))) return null;
+  const totalTicks = Number(user) + Number(system);
+  if (!Number.isSafeInteger(totalTicks)) return null;
+  return { cpuMs: (totalTicks / ticksPerSecond) * 1000, startTicks: startTicks! };
 }
 
 function resourceOutcome(
@@ -1943,6 +1987,8 @@ function safeError(error: unknown): string {
 
 /** @internal */
 export const __test = {
+  HostCpuObserver,
+  parseLinuxProcessCpuStat,
   WritableStorageBudget,
   resourceOutcome,
   outcomeToExhausted,

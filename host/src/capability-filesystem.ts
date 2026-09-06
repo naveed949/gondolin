@@ -251,8 +251,19 @@ export function commitExactWriterTarget(
       validation,
       0o600,
     );
-    if (contents.length > 0) {
-      fs.writeSync(stagedFd, contents, 0, contents.length, 0);
+    let written = 0;
+    while (written < contents.length) {
+      const count = fs.writeSync(
+        stagedFd,
+        contents,
+        written,
+        contents.length - written,
+        written,
+      );
+      if (count <= 0) {
+        validation.invalid("filesystem staging write made no progress");
+      }
+      written += count;
     }
     fs.fsyncSync(stagedFd);
     fs.closeSync(stagedFd);

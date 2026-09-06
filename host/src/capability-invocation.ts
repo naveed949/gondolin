@@ -1702,7 +1702,20 @@ export class CapabilityInvocationContext {
       throw admissionError;
     }
 
-    if (teardownComplete && hasObservedMutation(observed)) {
+    // An abort may race with a successful exec response. Never let that response
+    // authorize publication after the output or wall-time limit was exceeded.
+    if (!admissionError) {
+      if (output.overflowed) outcome = "output_overflow";
+      else if (timedOut) outcome = "timeout";
+    }
+
+    // Guest mutations remain private until both execution and teardown succeed.
+    // Discarding this snapshot needs no host rollback or restoration authority.
+    if (
+      outcome === "success" &&
+      teardownComplete &&
+      hasObservedMutation(observed)
+    ) {
       try {
         finalContents = await readProviderFile(provider, relativeGuestPath);
         const publishedIdentity = commitExactWriterTarget(

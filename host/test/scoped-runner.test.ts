@@ -17,6 +17,7 @@ import {
 } from "../src/index.ts";
 import { buildExecRequest } from "../src/sandbox/virtio-protocol.ts";
 import { __test } from "../src/scoped-runner.ts";
+import { VM } from "../src/vm/core.ts";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-runner-"));
 const sourcePath = path.join(tempRoot, "source.ts");
@@ -503,4 +504,125 @@ test("feature manifest keeps unqualified resource controls unverified", () => {
     ],
     "unverified",
   );
+});
+
+function processStat(user = "30", system = "20", start = "1000"): string {
+  const fields = Array.from({ length: 20 }, () => "0");
+  fields[0] = "S";
+  fields[11] = user;
+  fields[12] = system;
+  fields[19] = start;
+  return `123 (qemu (worker)) ${fields.join(" ")}\n`;
+}
+
+test("CPU stat parsing pins process start identity and rejects malformed counters", () => {
+  assert.deepEqual(__test.parseLinuxProcessCpuStat(processStat(), 100), {
+    cpuMs: 500, startTicks: "1000",
+  });
+  for (const invalid of ["-1", "NaN", "1e3", "1.5", "", "9007199254740992"]) {
+    assert.equal(__test.parseLinuxProcessCpuStat(processStat(invalid), 100), null);
+  }
+  assert.equal(__test.parseLinuxProcessCpuStat(processStat("1", "2", "-1"), 100), null);
+  assert.equal(__test.parseLinuxProcessCpuStat("123 (qemu) S 0", 100), null);
+  assert.equal(__test.parseLinuxProcessCpuStat(processStat(), 0), null);
+});
+
+test("CPU observer never samples a terminated process when reporting the last lower bound", () => {
+  let calls = 0;
+  const observer = new __test.HostCpuObserver(() => {
+    calls++;
+    return calls === 1 ? { cpuMs: 500, startTicks: "10" }
+      : calls === 2 ? { cpuMs: 525, startTicks: "10" } : null;
+  });
+  assert.equal(observer.sampleElapsedMs(), 25);
+  assert.equal(observer.elapsedMs(), 25);
+  assert.equal(calls, 2);
+  assert.throws(() => observer.sampleElapsedMs(), /unavailable or changed identity/);
+  assert.equal(observer.elapsedMs(), 25);
+});
+
+test("CPU observation fails permanently on missing samples, reused PIDs, or counter regression", () => {
+  for (const failure of [null, { cpuMs: 700, startTicks: "11" }, { cpuMs: 400, startTicks: "10" }]) {
+    let sample: { cpuMs: number; startTicks: string } | null = { cpuMs: 500, startTicks: "10" };
+    const observer = new __test.HostCpuObserver(() => sample);
+    sample = { cpuMs: 550, startTicks: "10" };
+    assert.equal(observer.sampleElapsedMs(), 50);
+    sample = failure;
+    assert.throws(() => observer.sampleElapsedMs(), /unavailable or changed identity/);
+    sample = { cpuMs: 750, startTicks: "10" };
+    assert.throws(() => observer.sampleElapsedMs(), /unavailable or changed identity/);
+    assert.equal(observer.elapsedMs(), 50);
+  }
+});
+
+test("scoped invocation settles CPU observation failures and captures its final sample before teardown", async (t) => {
+  for (const scenario of ["lost-observer", "final-budget", "startup-failure", "guest-crash"] as const) {
+    await t.test(scenario, async (t) => {
+      let closed = false;
+      let samples = 0;
+      let aborted = false;
+      const observer = new __test.HostCpuObserver(() => {
+        assert.equal(closed, false, "CPU samples must precede VM teardown");
+        samples++;
+        return samples === 1 ? { cpuMs: 100, startTicks: "50" }
+          : (scenario === "lost-observer" || scenario === "guest-crash") ? null : { cpuMs: 6100, startTicks: "50" };
+      });
+      t.mock.method(__test.HostCpuObserver, "create", () => observer);
+      t.mock.method(VM, "create", async () => ({
+        id: `unit-resource-${scenario}`,
+        getRuntimeIdentity: () => ({
+          vmm: "qemu", hostPlatform: "linux", hostArchitecture: "x64",
+          guestArchitecture: "x86_64", imageDigest: "unit", guestKernelDigest: "unit",
+          guestControlDigest: "unit", guestFeatures: [
+            "exec.clear-env/v1", "exec.executable-mount-policy/v1", "exec.exact-path-lsm/v1",
+            "exec.payload-confinement/v1", "exec.landlock-allowlist/v1",
+            "exec.namespace-isolation/v1", "exec.resource-limits/v1",
+          ],
+        }),
+        getHostPid: () => 2147483647,
+        start: async () => {
+          if (scenario === "startup-failure") throw new Error("unit startup failure");
+        },
+        exec: async (_args: unknown, options: { signal: AbortSignal }) => {
+          if (scenario === "guest-crash") throw new Error("unit crashed VM");
+          if (scenario === "lost-observer") {
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error("observer did not abort invocation")), 1000);
+              options.signal.addEventListener("abort", () => {
+                clearTimeout(timer);
+                aborted = true;
+                resolve();
+              }, { once: true });
+            });
+          }
+          // Even a racing successful exit cannot conceal lost enforcement.
+          return { exitCode: 0 };
+        },
+        close: async () => { closed = true; },
+      }) as unknown as VM);
+      const result = await ScopedRunnerInvocationContext.create(ceiling()).invoke(request());
+      assert.equal(closed, true);
+      if (scenario === "lost-observer") {
+        assert.equal(aborted, true);
+        assert.equal(result.outcome, "host_controller_failure");
+        assert.equal(result.resourceAccounting.observations.cpu, "host-qemu-process-incomplete");
+        assert.equal(result.resourceAccounting.usage.cpuTimeMs, 0);
+        assert.match(result.error!, /CPU accounting became unavailable/);
+      } else if (scenario === "final-budget") {
+        assert.equal(result.outcome, "cpu_exhausted");
+        assert.equal(result.resourceAccounting.usage.cpuTimeMs, 6000);
+        assert.equal(result.resourceAccounting.exhaustionObservation, "host-observed");
+      } else if (scenario === "guest-crash") {
+        assert.equal(result.outcome, "guest_crash");
+        assert.equal(result.resourceAccounting.usage.cpuTimeMs, 0);
+        assert.equal(result.resourceAccounting.observations.cpu, "host-qemu-process-incomplete");
+        assert.match(result.error!, /unit crashed VM/);
+      } else {
+        assert.equal(result.outcome, "host_controller_failure");
+        assert.equal(result.resourceAccounting.usage.cpuTimeMs, null);
+        assert.equal(result.resourceAccounting.observations.cpu, "unavailable");
+      }
+      assert.deepEqual(result.evidence.resources, result.resourceAccounting);
+    });
+  }
 });
