@@ -4,6 +4,8 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.4
+
 - Cancel tracked host HTTP operations and await bounded dispatcher destruction
   before network teardown settles. Cleanup failure still permits runner and
   filesystem cleanup and remains an incomplete teardown result. Detached socket
@@ -14,7 +16,7 @@ All notable changes to Gondolin are documented here.
 - Restrict capability public-only egress to the versioned conservative public
   address profile, including special-purpose IPv4/IPv6 and mixed DNS candidate
   rejection. Network policy advances to `http-tls-mediator/v2`; the manifest
-  advertises `network.resolution.public-address-v1`. This is an unreleased
+  advertises `network.resolution.public-address-v1`. This is an experimental
   prerequisite, not AdaptiveSandbox network admission or runtime qualification.
 
 ## 0.12.1-adaptivesandbox.3
