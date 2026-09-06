@@ -4,6 +4,14 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.6
+
+- Stabilize the exact-writer failure integration fixtures with a bounded ten-second
+  deadline that includes command dispatch. Retain required write observation,
+  timeout, unchanged-target, non-publication, and signed-evidence assertions.
+  CI requires three consecutive non-skipping runs for both target-existence cases.
+  Runtime enforcement is unchanged; AdaptiveSandbox qualification remains pending.
+
 ## 0.12.1-adaptivesandbox.5
 
 - Add the dedicated, credential-free HTTPS invocation profile with strict

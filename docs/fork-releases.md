@@ -1,17 +1,24 @@
 # Experimental fork releases
 
-The next prepared fork release is `v0.12.1-adaptivesandbox.5`. It is a GitHub-only,
+The next prepared fork release is `v0.12.1-adaptivesandbox.6`. It is a GitHub-only,
 QEMU-only prerelease for adapter development. It is not an AdaptiveSandbox-qualified
 release, and it does not unblock qualified production admission by itself.
-The credential-free HTTPS invocation implementation included in `.5` adds
+The credential-free HTTPS invocation implementation carried forward from `.5` adds
 authenticated connected-peer/TLS observations, response provenance, and bounded
 response settlement, advancing its network policy to `http-tls-mediator/v3`.
 Existing `.4` assets remain unchanged. Independent external acceptance still
 blocks AdaptiveSandbox HTTPS admission. These changes do not qualify Linux or
 macOS.
 
-The `.5` tag and release are created only after these preparation changes are
-reviewed, merged, and the exact main commit passes CI. Never retag `.4`.
+The `.5` release workflow failed its exact-writer timeout integration test before
+publication; no `.5` release assets were published. Its tag remains at the original
+source commit. `.6` gives each writer failure fixture a bounded ten-second deadline
+for command dispatch and the staged write, retaining every failure-atomicity assertion. CI also
+requires three consecutive non-skipping runs of both timeout cases. Runtime
+enforcement is unchanged.
+
+Create the `.6` tag only after these changes are reviewed, merged, and the exact
+main commit passes CI. Never retag `.4` or `.5`.
 
 ## Prepare and publish
 
@@ -22,8 +29,8 @@ reviewed, merged, and the exact main commit passes CI. Never retag `.4`.
    ```bash
    git switch main
    git pull --ff-only origin main
-   git tag -a v0.12.1-adaptivesandbox.5 -m "Experimental AdaptiveSandbox integration release"
-   git push origin v0.12.1-adaptivesandbox.5
+   git tag -a v0.12.1-adaptivesandbox.6 -m "Experimental AdaptiveSandbox integration release"
+   git push origin v0.12.1-adaptivesandbox.6
    ```
 
 3. Watch **Experimental GitHub Release** in Actions. It validates the tag, reuses
@@ -54,10 +61,10 @@ artifact removes optional krun packages and workspace lifecycle scripts. It can
 still be installed from a downloaded tarball:
 
 ```bash
-gh release download v0.12.1-adaptivesandbox.5 --repo naveed949/gondolin --dir gondolin-release
+gh release download v0.12.1-adaptivesandbox.6 --repo naveed949/gondolin --dir gondolin-release
 cd gondolin-release
 sha256sum --check SHA256SUMS
-npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.5.tgz
+npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.6.tgz
 ```
 
 On macOS, use `shasum -a 256 -c SHA256SUMS`. Install QEMU separately. The package's
@@ -69,7 +76,7 @@ image archive for a fully explicit local setup.
 
 The image registry includes an `alpine-base:latest` alias *within the fixed
 release registry*. For explicit development identity use
-`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.5`, or a digest-verified
+`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.6`, or a digest-verified
 extracted image directory. Existing local image caches and explicit overrides
 are operator state, not qualification evidence.
 
