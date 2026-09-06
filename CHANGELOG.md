@@ -4,6 +4,14 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.5
+
+- Add the dedicated, credential-free HTTPS invocation profile with strict
+  GET/HEAD authority, public-address and connected-peer checks, standard TLS
+  verification, one upstream attempt, bounded decoded response bodies, and
+  authenticated response evidence. This is an experimental implementation;
+  external acceptance and AdaptiveSandbox qualification remain pending.
+
 ## 0.12.1-adaptivesandbox.4
 
 - Cancel tracked host HTTP operations and await bounded dispatcher destruction
