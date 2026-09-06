@@ -236,6 +236,8 @@ export type ScopedRunnerProcessEvent = AuthenticatedEvidenceEvent & {
 export type ScopedRunnerInvocationEvidence = {
   /** Evidence schema identifier */
   schemaVersion: typeof CAPABILITY_EVIDENCE_SCHEMA_VERSION;
+  /** No host publication in the scoped ephemeral profile */
+  publication: null;
   /** Capability request schema identifier */
   capabilitySchemaVersion: typeof CAPABILITY_INVOCATION_SCHEMA_VERSION;
   /** Gondolin package version */
@@ -1018,6 +1020,7 @@ export class ScopedRunnerInvocationContext {
     );
     const evidence = sealCapabilityEvidence({
       schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+      publication: null,
       capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
       gondolinVersion: gondolinVersion(),
       decision: "admitted" as const,

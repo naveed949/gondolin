@@ -422,7 +422,8 @@ Before admission, host targets are canonicalized and Git paths, symlinks, and
 hard-linked files are rejected. Existing target device/inode identity, missing
 target state, and parent-directory identity are pinned at ceiling creation and
 rechecked before execution and commit. After an authorized atomic publication,
-the context advances only that target's pin to the host-published inode so later
+after verified target contents, staging cleanup, and evidence sealing, the
+context advances only that target's pin to the host-published inode so later
 invocations remain usable without accepting an external replacement. Guest
 writes occur only in a fresh memory VFS. Its exact output inode is prepared
 before Landlock setup, including an empty placeholder when the host target does
@@ -448,7 +449,7 @@ bits, but intentionally publishes a new inode; ACLs, extended attributes, inode
 flags, and timestamps are not preserved. A target whose parent cannot support
 that publication is rejected with the distinct `commit_failure` outcome; it is
 never reported as a successful invocation. Command, policy, transport, limit,
-and teardown failures discard private mutations without publishing or restoring
+and VM teardown failures before host publication discard private mutations without publishing or restoring
 host bytes. On these failures `outputDigest` remains the digest of the initial
 snapshot (or `null` for an initially absent target); observed filesystem effects
 still describe private guest mutations, not proof of host publication.
@@ -461,6 +462,67 @@ missing result. A `commit_failure` therefore does not promise an unchanged targe
 External host namespace changes and post-publication filesystem errors remain
 outside a fully qualified failure-atomic transaction guarantee. No qualification
 allowlist or runtime guarantee is promoted by this change.
+
+### Publication settlement evidence (unreleased evidence v3)
+
+The feature manifest advertises `gondolin.capability-evidence/v3` and explicitly
+rejects v1/v2. Consumers must negotiate this exact evidence schema before
+admission and verify the signature and expected request, ceiling, execution and
+runtime bindings. This source change does not change the immutable `.2` release.
+Reader and scoped-runner records carry `publication: null`; guest-private writes
+in the scoped-runner never establish host publication.
+
+Each writer's signed envelope includes a `gondolin.exact-writer-publication/v1`
+record. Its expected parent/target and prepared inode identities use decimal
+device/inode strings. Initial and prepared digests use `sha256:<hex>`; prepared
+bytes are private output, not proof that those bytes reached the host target.
+The containing signed request digest binds the selected target and invocation
+ID; the same envelope binds execution, ceiling, runtime and result identity.
+
+| State | Meaning | Retry implications |
+| --- | --- | --- |
+| `not_published` | No visibility primitive was attempted by this invocation | Does not prove other actors left the target unchanged or grant retry authority |
+| `published` | Host link/rename returned successfully | Historical visibility, even if a later verification or cleanup fails |
+| `indeterminate` | Link/rename was entered but successful completion could not be established | No abort, rollback, or automatic retry inference |
+
+`phase` records the last preparation/publication/verification boundary reached,
+independently of cleanup. A successful target verification checks the published
+inode, parent and content through a no-follow descriptor at that observation
+point; it cannot promise that a concurrent host writer will not change them.
+`outputDigest` is conservative: publication errors return `null`, including when
+the prepared digest is known. Unpublished command failures retain the original
+snapshot digest, which is also not a claim about ongoing host contents.
+
+`stagingCleanup` independently reports removal of the private host staging
+objects and closure of all publication-owned descriptors (parent directory,
+staged payload, existing target, and target verification). A failed close is
+never retried by descriptor number, because that number may already have been
+reused for an unrelated resource. Failure or ambiguity makes
+`ephemeralStateDestroyed` false, gives the final outcome `teardown_failure`,
+and prevents the lifecycle registry from claiming complete teardown. A failure
+before publication plus failed cleanup still remains `not_published`; a failure
+after publication remains `published`. A guest exit code and private observed
+operations are distinct from this final settlement outcome.
+
+`durability` and `evidenceFinalization` are always `unknown`: staged-file fsync
+is not parent-directory durability or durable receipt delivery. Successful
+experimental invocation results do not establish those guarantees. Signature
+verification authenticates a received record; it cannot upgrade these fields.
+
+The target pin is reserved before asynchronous execution, preventing concurrent
+same-target use. Stale identity, uncertain publication, cleanup failure or an
+exception before returning sealed evidence invalidates that pin. A later request
+cannot reuse it; unaffected target pins remain independent. Missing results,
+including signing failure or process death after publication, have no fabricated
+signed settlement. Callers must treat acknowledgement loss as ambiguous and must
+not rerun the command or restore old bytes to resolve it.
+
+This profile assumes a supported local filesystem implementing regular-file
+link/rename visibility and a trusted host namespace. It does not establish
+compare-and-swap against hostile host writers, multi-file visibility, directory
+durability, durable authenticated status recovery, or independent cleanup
+observation. Those require separate protocol and owned/versioned workspace
+work. All qualification entries remain unverified.
 
 Writer evidence keeps requested, granted, attempted, denied, and observed
 effects separate, identifies resources by digest without recording content,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import crypto, { createHash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,8 +19,68 @@ import { unavailableRuntimeIdentity } from "../src/capability-runtime.ts";
 import {
   commitExactWriterTarget,
   getHostWriterTargetIdentity,
+  settleExactWriterTarget,
 } from "../src/capability-filesystem.ts";
+import {
+  sealCapabilityEvidence,
+  verifyCapabilityInvocationResult,
+  probeCapabilityInvocationTeardown,
+} from "../src/invocation-evidence.ts";
 import type { CapabilitySnapshotProvider } from "../src/capability-snapshot.ts";
+
+const descriptorFaults = ["parent", "staging", "current", "verification"].flatMap(
+  (phase) => ["leak", "reuse"].map((effect) => `${phase}_${effect}`),
+);
+
+function injectDescriptorFault(
+  t: import("node:test").TestContext,
+  target: string,
+  fault: string,
+  active: () => boolean,
+  published: () => boolean,
+): () => void {
+  const open = fs.openSync;
+  const close = fs.closeSync;
+  const owned = new Set<number>();
+  let selected: number | undefined;
+  let fired = false;
+  let replacement: number | undefined;
+  t.mock.method(fs, "openSync", (...args: Parameters<typeof open>) => {
+    const fd = open(...args);
+    if (!active() || fired) return fd;
+    const name = String(args[0]);
+    const phase = fault.split("_")[0];
+    if (
+      (phase === "parent" && name === path.dirname(target)) ||
+      (phase === "staging" && name.includes(".gondolin-commit-")) ||
+      (phase === "current" && name === target && !published()) ||
+      (phase === "verification" && name === target && published())
+    ) selected = fd;
+    return fd;
+  });
+  t.mock.method(fs, "closeSync", (fd: number) => {
+    if (fd !== selected || fired) return close(fd);
+    fired = true;
+    if (fault.endsWith("reuse")) {
+      close(fd);
+      replacement = open(target, fs.constants.O_RDONLY);
+      assert.equal(replacement, fd, "fault must exercise reused fd number");
+      owned.add(replacement);
+    } else owned.add(fd);
+    throw new Error("descriptor close effect unavailable");
+  });
+  t.after(() => {
+    t.mock.restoreAll();
+    for (const fd of owned) {
+      try { close(fd); } catch {}
+    }
+  });
+  return () => {
+    assert.ok(fired, "selected descriptor fault reached");
+    if (replacement !== undefined)
+      assert.ok(fs.fstatSync(replacement).isFile(), "unrelated reused fd remains open");
+  };
+}
 
 function writerCeiling(
   targetPaths: string[],
@@ -80,6 +141,12 @@ for (const initiallyExists of [true, false]) {
     "output_overflow",
     "teardown_failure",
     "runner_alive",
+    "cleanup_failure",
+    "verification_failure",
+    "unlink_failure",
+    "visibility_throw",
+    "signing_failure",
+    ...(initiallyExists ? descriptorFaults : []),
   ]) {
     test(`writer ${scenario} publication, initially exists=${initiallyExists}`, async (t) => {
       const directory = fs.mkdtempSync(
@@ -88,6 +155,7 @@ for (const initiallyExists of [true, false]) {
       t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
       const target = path.join(directory, "target.txt");
       if (initiallyExists) fs.writeFileSync(target, "original");
+      let publicationActive = false;
       const assertUnpublished = () => {
         if (initiallyExists)
           assert.equal(fs.readFileSync(target, "utf8"), "original");
@@ -167,12 +235,56 @@ for (const initiallyExists of [true, false]) {
             },
             close: async () => {
               assertUnpublished();
+              publicationActive = true;
               if (scenario === "teardown_failure")
                 throw new Error("close failed");
             },
           } as unknown as VM;
         },
       );
+      let visibilityReached = false;
+      const primitive = initiallyExists ? "renameSync" : "linkSync";
+      const publish = fs[primitive];
+      t.mock.method(fs, primitive, (...args: Parameters<typeof publish>) => {
+        publish(...args);
+        visibilityReached = true;
+        if (scenario === "visibility_throw")
+          throw new Error("ambiguous syscall result");
+      });
+      if (scenario === "cleanup_failure") {
+        const remove = fs.rmSync;
+        t.mock.method(fs, "rmSync", (...args: Parameters<typeof remove>) => {
+          if (String(args[0]).includes(".gondolin-commit-"))
+            throw new Error("cleanup failed");
+          return remove(...args);
+        });
+      }
+      if (scenario === "verification_failure") {
+        const stat = fs.lstatSync;
+        t.mock.method(fs, "lstatSync", (...args: Parameters<typeof stat>) => {
+          if (visibilityReached && String(args[0]) === target)
+            throw new Error("target stat failed");
+          return stat(...args);
+        });
+      }
+      if (scenario === "unlink_failure" && !initiallyExists) {
+        t.mock.method(fs, "unlinkSync", () => {
+          throw new Error("unlink failed");
+        });
+      }
+      if (scenario === "signing_failure") {
+        t.mock.method(crypto, "sign", () => {
+          throw new Error("signing unavailable");
+        });
+        syncBuiltinESMExports();
+        t.after(() => {
+          t.mock.restoreAll();
+          syncBuiltinESMExports();
+        });
+      }
+      const checkDescriptor = descriptorFaults.includes(scenario)
+        ? injectDescriptorFault(t, target, scenario, () => publicationActive, () => visibilityReached)
+        : null;
       const context = CapabilityInvocationContext.create(
         writerCeiling([target]),
       );
@@ -180,7 +292,80 @@ for (const initiallyExists of [true, false]) {
       if (!initiallyExists)
         request.capabilities.filesystem.operations.push("create");
       request.limits = { outputBytes: 4, wallTimeMs: 10 };
+      if (scenario === "signing_failure") {
+        await assert.rejects(context.invoke(request), /signing unavailable/);
+        assert.equal(fs.readFileSync(target, "utf8"), "private result");
+        await assert.rejects(
+          context.invoke({ ...request, invocationId: "retry" }),
+          /no identity/,
+        );
+        return; // No fabricated receipt or automatic command retry after acknowledgement loss.
+      }
       const result = await context.invoke(request);
+      assert.deepEqual(verifyCapabilityInvocationResult(result).errors, []);
+      if (checkDescriptor) {
+        checkDescriptor();
+        assert.equal(result.outcome, "teardown_failure");
+        assert.equal(result.evidence.publication?.state,
+          scenario.startsWith("verification") ? "published" : "not_published");
+        assert.equal(result.evidence.publication?.stagingCleanup, "failed");
+        assert.equal(result.evidence.teardown.ephemeralStateDestroyed, false);
+        assert.equal(probeCapabilityInvocationTeardown(result.evidence.executionId).teardownVerified, false);
+        assert.equal(fs.readFileSync(target, "utf8"),
+          scenario.startsWith("verification") ? "private result" : "original");
+        await assert.rejects(context.invoke({ ...request, invocationId: "retry" }), /no identity/);
+        return;
+      }
+      if (
+        [
+          "cleanup_failure",
+          "verification_failure",
+          "unlink_failure",
+          "visibility_throw",
+        ].includes(scenario)
+      ) {
+        const expectedFailure =
+          scenario === "unlink_failure" && initiallyExists
+            ? "success"
+            : scenario === "cleanup_failure"
+              ? "teardown_failure"
+              : "commit_failure";
+        assert.equal(result.outcome, expectedFailure);
+        assert.equal(fs.readFileSync(target, "utf8"), "private result");
+        assert.equal(
+          result.evidence.publication?.state,
+          scenario === "visibility_throw" ? "indeterminate" : "published",
+        );
+        assert.equal(result.evidence.publication?.durability, "unknown");
+        assert.equal(
+          result.evidence.publication?.evidenceFinalization,
+          "unknown",
+        );
+        assert.equal(
+          result.evidence.teardown.ephemeralStateDestroyed,
+          scenario !== "cleanup_failure",
+        );
+        assert.equal(
+          probeCapabilityInvocationTeardown(result.evidence.executionId)
+            .teardownVerified,
+          scenario !== "cleanup_failure",
+        );
+        if (expectedFailure !== "success") {
+          assert.equal(result.evidence.outputDigest, null);
+          visibilityReached = false;
+          await assert.rejects(
+            context.invoke({ ...request, invocationId: "retry" }),
+            /no identity/,
+          );
+        }
+        assert.equal(
+          fs
+            .readdirSync(directory)
+            .some((name) => name.startsWith(".gondolin-commit-")),
+          scenario === "cleanup_failure",
+        );
+        return;
+      }
       const expectedOutcome =
         scenario === "descendant_denied"
           ? "policy_denied"
@@ -192,6 +377,50 @@ for (const initiallyExists of [true, false]) {
         result.evidence.observed.some((effect) => effect.operation === "write"),
       );
       if (scenario === "success") {
+        assert.equal(result.evidence.publication?.state, "published");
+        const alterations = [
+          { state: "indeterminate" },
+          { state: ["published"] },
+          { phase: ["verified"] },
+          { stagingCleanup: "failed" },
+          { state: "not_published" },
+          { preparedDigest: `sha256:${"0".repeat(64)}` },
+          { expectedTarget: { parent: { dev: "bad", ino: "1" }, file: null } },
+          { durability: "verified" },
+          { evidenceFinalization: "verified" },
+        ];
+        for (const change of alterations) {
+          const { integrity: _, ...unsigned } = result.evidence;
+          const evidence = sealCapabilityEvidence({
+            ...unsigned,
+            publication: { ...unsigned.publication, ...change },
+          });
+          assert.equal(
+            verifyCapabilityInvocationResult({ ...result, evidence }).valid,
+            false,
+          );
+        }
+        const { integrity: _, ...unsigned } = result.evidence;
+        assert.equal(
+          verifyCapabilityInvocationResult({
+            ...result,
+            evidence: sealCapabilityEvidence({
+              ...unsigned,
+              outputDigest: null,
+            }),
+          }).valid,
+          false,
+        );
+        assert.equal(
+          verifyCapabilityInvocationResult({
+            ...result,
+            evidence: sealCapabilityEvidence({
+              ...unsigned,
+              publication: null,
+            }),
+          }).valid,
+          false,
+        );
         assert.equal(fs.readFileSync(target, "utf8"), "private result");
       } else {
         assertUnpublished();
@@ -255,3 +484,181 @@ for (const stalled of [false, true]) {
     assert.deepEqual(fs.readdirSync(directory), ["target.txt"]);
   });
 }
+
+for (const initiallyExists of [true, false]) {
+  for (const fault of [
+    "prepare",
+    "prepare_and_cleanup",
+    "before_publish",
+    "syscall_before",
+    "syscall_after_same_bytes",
+  ]) {
+    test(`phase-aware helper ${fault}, initially exists=${initiallyExists}`, (t) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-phase-"));
+      const target = path.join(dir, "target");
+      const before = initiallyExists ? Buffer.from("same bytes") : null;
+      if (before) fs.writeFileSync(target, before);
+      const expected = getHostWriterTargetIdentity(target);
+      const remove = fs.rmSync;
+      t.after(() => {
+        t.mock.restoreAll();
+        remove(dir, { recursive: true, force: true });
+      });
+      if (fault.startsWith("prepare"))
+        t.mock.method(fs, "fsyncSync", () => {
+          throw new Error("prepare failed");
+        });
+      if (fault === "prepare_and_cleanup")
+        t.mock.method(fs, "rmSync", () => {
+          throw new Error("cleanup failed");
+        });
+      if (fault.startsWith("syscall")) {
+        const primitive = initiallyExists ? "renameSync" : "linkSync";
+        const publish = fs[primitive];
+        t.mock.method(fs, primitive, (...args: Parameters<typeof publish>) => {
+          if (fault === "syscall_after_same_bytes") publish(...args);
+          throw new Error("syscall result lost");
+        });
+      }
+      const result = settleExactWriterTarget(
+        target,
+        expected,
+        before,
+        Buffer.from("same bytes"),
+        new Set(["create", "write"]),
+        {
+          beforePublish: () => {
+            if (fault === "before_publish")
+              throw new Error("validation failed");
+          },
+        },
+      );
+      assert.ok(result.error);
+      assert.equal(
+        result.publication.state,
+        fault.startsWith("syscall") ? "indeterminate" : "not_published",
+      );
+      assert.equal(
+        result.publication.stagingCleanup,
+        fault === "prepare_and_cleanup" ? "failed" : "verified",
+      );
+      assert.equal(result.publication.targetVerification, "unknown");
+      assert.equal(
+        fs.existsSync(target),
+        initiallyExists || fault === "syscall_after_same_bytes",
+      );
+      if (fs.existsSync(target))
+        assert.equal(fs.readFileSync(target, "utf8"), "same bytes");
+      if (fault === "prepare_and_cleanup")
+        assert.match(String(result.error), /prepare failed/);
+    });
+  }
+}
+
+test("lost staging allocation response keeps cleanup unknown", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-lost-stage-"));
+  const target = path.join(dir, "target");
+  const expected = getHostWriterTargetIdentity(target);
+  const allocate = fs.mkdtempSync;
+  const remove = fs.rmSync;
+  t.after(() => {
+    t.mock.restoreAll();
+    remove(dir, { recursive: true, force: true });
+  });
+  t.mock.method(fs, "mkdtempSync", (...args: Parameters<typeof allocate>) => {
+    allocate(...args);
+    throw undefined;
+  });
+  const result = settleExactWriterTarget(
+    target,
+    expected,
+    null,
+    Buffer.from("output"),
+    new Set(["create"]),
+  );
+  assert.equal(result.failed, true);
+  assert.equal(result.error, undefined);
+  assert.equal(result.publication.state, "not_published");
+  assert.equal(result.publication.stagingCleanup, "unknown");
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.readdirSync(dir).length, 1);
+});
+
+test("in-place mutation of published inode fails content verification", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-inplace-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, "target");
+  fs.writeFileSync(target, "before");
+  const expected = getHostWriterTargetIdentity(target);
+  const rename = fs.renameSync;
+  t.mock.method(fs, "renameSync", (...args: Parameters<typeof rename>) => {
+    rename(...args);
+    fs.writeFileSync(target, "external content");
+  });
+  const result = settleExactWriterTarget(
+    target,
+    expected,
+    Buffer.from("before"),
+    Buffer.from("output"),
+    new Set(["write"]),
+  );
+  assert.equal(result.failed, true);
+  assert.equal(result.publication.state, "published");
+  assert.equal(result.publication.targetVerification, "failed");
+  assert.equal(fs.readFileSync(target, "utf8"), "external content");
+});
+
+for (const fault of descriptorFaults) {
+  test(`publication helper tracks descriptor ${fault}`, (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-descriptor-"));
+    const target = path.join(dir, "target");
+    fs.writeFileSync(target, "original");
+    const expected = getHostWriterTargetIdentity(target);
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    let published = false;
+    const rename = fs.renameSync;
+    t.mock.method(fs, "renameSync", (...args: Parameters<typeof rename>) => {
+      rename(...args);
+      published = true;
+    });
+    const check = injectDescriptorFault(t, target, fault, () => true, () => published);
+    const result = settleExactWriterTarget(target, expected, Buffer.from("original"),
+      Buffer.from("output"), new Set(["write", "truncate"]));
+    check();
+    assert.equal(result.failed, true);
+    assert.equal(result.publication.stagingCleanup, "failed");
+    assert.equal(result.publication.state, fault.startsWith("verification") ? "published" : "not_published");
+    assert.equal(fs.readFileSync(target, "utf8"), published ? "output" : "original");
+  });
+}
+
+test("target stat failure closes the descriptor before ownership transfer", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-target-stat-"));
+  const target = path.join(dir, "target");
+  fs.writeFileSync(target, "original");
+  const expected = getHostWriterTargetIdentity(target);
+  const open = fs.openSync;
+  const stat = fs.fstatSync;
+  let targetFd: number | undefined;
+  t.after(() => {
+    t.mock.restoreAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  t.mock.method(fs, "openSync", (...args: Parameters<typeof open>) => {
+    const fd = open(...args);
+    if (String(args[0]) === target) targetFd = fd;
+    return fd;
+  });
+  t.mock.method(fs, "fstatSync", (...args: Parameters<typeof stat>) => {
+    if (args[0] === targetFd) throw new Error("target stat failed");
+    return stat(...args);
+  });
+  const result = settleExactWriterTarget(target, expected, Buffer.from("original"),
+    Buffer.from("output"), new Set(["write", "truncate"]));
+  assert.equal(result.failed, true);
+  assert.equal(result.publication.state, "not_published");
+  assert.equal(result.publication.stagingCleanup, "verified");
+  assert.notEqual(targetFd, undefined);
+  assert.throws(() => stat(targetFd!), { code: "EBADF" });
+  assert.equal(fs.readFileSync(target, "utf8"), "original");
+});

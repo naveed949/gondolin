@@ -4,6 +4,11 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Add evidence v3 publication settlement for exact writers, distinguishing known
+  visibility from uncertainty and tracking host staging cleanup independently.
+  This is experimental evidence honesty, not durable recovery or qualification.
+
+
 ## 0.12.1-adaptivesandbox.2
 
 - Keep exact-writer mutations private on command, policy, transport, timeout,

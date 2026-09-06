@@ -52,11 +52,11 @@
   },
   "rows": [
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-linux-x64-x86_64",
+      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-linux-x64-x86_64",
       "identity": {
         "gondolinVersion": "0.12.0",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
-        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
         "policyVersionsDigest": null,
         "adaptiveSandboxBundleVersion": null,
@@ -75,11 +75,11 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-linux-arm64-aarch64",
+      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-linux-arm64-aarch64",
       "identity": {
         "gondolinVersion": "0.12.0",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
-        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
         "policyVersionsDigest": null,
         "adaptiveSandboxBundleVersion": null,
@@ -98,11 +98,11 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-darwin-arm64-aarch64",
+      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-arm64-aarch64",
       "identity": {
         "gondolinVersion": "0.12.0",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
-        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
         "policyVersionsDigest": null,
         "adaptiveSandboxBundleVersion": null,
@@ -121,11 +121,11 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-darwin-x64-x86_64",
+      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-x64-x86_64",
       "identity": {
         "gondolinVersion": "0.12.0",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
-        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
         "policyVersionsDigest": null,
         "adaptiveSandboxBundleVersion": null,
@@ -144,11 +144,11 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-qemu-unpinned-win32-x64-x86_64",
+      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-win32-x64-x86_64",
       "identity": {
         "gondolinVersion": "0.12.0",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
-        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
         "policyVersionsDigest": null,
         "adaptiveSandboxBundleVersion": null,
@@ -167,11 +167,11 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-krun-linux-x64-x86_64",
+      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-krun-linux-x64-x86_64",
       "identity": {
         "gondolinVersion": "0.12.0",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
-        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
         "policyVersionsDigest": null,
         "adaptiveSandboxBundleVersion": null,
@@ -190,11 +190,11 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v2-bundle-unreleased-krun-darwin-arm64-aarch64",
+      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-krun-darwin-arm64-aarch64",
       "identity": {
         "gondolinVersion": "0.12.0",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
-        "evidenceSchemaVersion": "gondolin.capability-evidence/v2",
+        "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
         "policyVersionsDigest": null,
         "adaptiveSandboxBundleVersion": null,

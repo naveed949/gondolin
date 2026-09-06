@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256 } from "./canonical-json.ts";
 
 export type HostFileIdentity = {
   /** Host filesystem device identity */
@@ -31,6 +32,107 @@ export type ExactWriterCommitHooks = {
   /** Test-only synchronization point before atomic publication */
   beforePublish?: () => void;
 };
+
+/** Historical visibility evidence under the local exact-file publication profile */
+export type ExactWriterPublication = {
+  schemaVersion: "gondolin.exact-writer-publication/v1";
+  /** Whether this invocation crossed the host visibility boundary */
+  state: "not_published" | "published" | "indeterminate";
+  /** Last publication phase reached, independently of cleanup */
+  phase:
+    | "not_attempted"
+    | "preparing"
+    | "prepared"
+    | "publishing"
+    | "published"
+    | "verified";
+  /** Local visibility primitive, without a crash-durability guarantee */
+  primitive: "link" | "rename";
+  /** Decimal device/inode identities pinned before execution */
+  expectedTarget: SerializedWriterIdentity;
+  /** Decimal device/inode identity of the prepared file */
+  stagedIdentity: { dev: string; ino: string } | null;
+  /** Initial content SHA-256, or `null` for an absent target */
+  initialDigest: string | null;
+  /** Prepared private output SHA-256, never a current-target assertion */
+  preparedDigest: string | null;
+  /** Postpublication identity verification status */
+  targetVerification: "verified" | "failed" | "unknown";
+  /** Removal of host staging objects and closure of all publication-owned descriptors */
+  stagingCleanup: "verified" | "failed" | "unknown";
+  /** Unsupported crash-durability proof */
+  durability: "unknown";
+  /** Unsupported durable evidence finalization and delivery proof */
+  evidenceFinalization: "unknown";
+};
+
+type SerializedWriterIdentity = {
+  parent: { dev: string; ino: string };
+  file: { dev: string; ino: string } | null;
+};
+
+export function unpublishedWriterPublication(
+  expected: HostWriterTargetIdentity,
+  initial: Buffer | null,
+): ExactWriterPublication {
+  const serialize = (value: HostFileIdentity) => ({
+    dev: String(value.dev),
+    ino: String(value.ino),
+  });
+  return {
+    schemaVersion: "gondolin.exact-writer-publication/v1",
+    state: "not_published",
+    phase: "not_attempted",
+    primitive: expected.file === null ? "link" : "rename",
+    expectedTarget: {
+      parent: serialize(expected.parent),
+      file: expected.file && serialize(expected.file),
+    },
+    stagedIdentity: null,
+    initialDigest: initial === null ? null : sha256(initial),
+    preparedDigest: null,
+    targetVerification: "unknown",
+    stagingCleanup: "verified",
+    durability: "unknown",
+    evidenceFinalization: "unknown",
+  };
+}
+
+export type ExactWriterSettlement = {
+  publication: ExactWriterPublication;
+  /** Verified published identity, or `null` if unavailable, even when cleanup subsequently fails */
+  identity: HostWriterTargetIdentity | null;
+  /** Failure occurrence independent of the thrown JavaScript value */
+  failed: boolean;
+  /** Original local exception, excluded from signed evidence */
+  error?: unknown;
+};
+
+// A failed close has an ambiguous effect: relinquish the numeric descriptor
+// before attempting it, since retrying could close an unrelated reused fd.
+class PublicationDescriptors {
+  readonly owned = new Set<number>();
+  ambiguousOpen = false;
+  closeFailed = false;
+
+  open(operation: () => number): number {
+    this.ambiguousOpen = true;
+    const fd = operation();
+    this.owned.add(fd);
+    this.ambiguousOpen = false;
+    return fd;
+  }
+
+  close(fd: number): void {
+    if (!this.owned.delete(fd)) return;
+    try {
+      fs.closeSync(fd);
+    } catch (error) {
+      this.closeFailed = true;
+      throw error;
+    }
+  }
+}
 
 const defaultValidation: CapabilityFilesystemValidation = {
   invalid(message): never {
@@ -179,11 +281,13 @@ export function readExactWriterTarget(
   targetPath: string,
   expected: HostWriterTargetIdentity,
   validation: CapabilityFilesystemValidation = defaultValidation,
+  descriptors?: PublicationDescriptors,
 ): Buffer | null {
   verifyHostDirectoryIdentity(
     path.dirname(targetPath),
     expected.parent,
     validation,
+    descriptors,
   );
   if (expected.file === null) {
     try {
@@ -200,11 +304,13 @@ export function readExactWriterTarget(
     fs.constants.O_RDONLY,
     validation,
     true,
+    descriptors,
   );
   try {
     return fs.readFileSync(fd);
   } finally {
-    fs.closeSync(fd);
+    if (descriptors) descriptors.close(fd);
+    else fs.closeSync(fd);
   }
 }
 
@@ -217,39 +323,72 @@ export function commitExactWriterTarget(
   hooks: ExactWriterCommitHooks = {},
   validation: CapabilityFilesystemValidation = defaultValidation,
 ): HostWriterTargetIdentity {
-  verifyHostDirectoryIdentity(
-    path.dirname(targetPath),
-    expected.parent,
+  const settlement = settleExactWriterTarget(
+    targetPath,
+    expected,
+    initial,
+    contents,
+    observedOperations,
+    hooks,
     validation,
   );
-  if (expected.file === null && !observedOperations.has("create")) {
-    validation.invalid(
-      "writer produced a missing target without an observed create",
-    );
-  }
-  if (
-    initial !== null &&
-    contents.length < initial.length &&
-    !observedOperations.has("truncate")
-  ) {
-    validation.invalid(
-      "writer shortened the target without truncate authority",
-    );
-  }
+  if (settlement.failed) throw settlement.error;
+  return settlement.identity!;
+}
 
-  const parent = path.dirname(targetPath);
-  const stagingDirectory = fs.mkdtempSync(
-    path.join(parent, `.gondolin-commit-${randomBytes(8).toString("hex")}-`),
-  );
-  const stagedPath = path.join(stagingDirectory, "payload");
-  let stagedFd: number | null = null;
+export function settleExactWriterTarget(
+  targetPath: string,
+  expected: HostWriterTargetIdentity,
+  initial: Buffer | null,
+  contents: Buffer,
+  observedOperations: ReadonlySet<ExactWriterOperation>,
+  hooks: ExactWriterCommitHooks = {},
+  validation: CapabilityFilesystemValidation = defaultValidation,
+): ExactWriterSettlement {
+  const publication = unpublishedWriterPublication(expected, initial);
+  publication.phase = "preparing";
+  publication.preparedDigest = sha256(contents);
+  let stagingDirectory: string | null = null;
+  let identity: HostWriterTargetIdentity | null = null;
+  let error: unknown;
+  let failed = false;
+  const descriptors = new PublicationDescriptors();
   try {
-    stagedFd = openNoFollow(
-      stagedPath,
-      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR,
-      "filesystem staging target",
+    verifyHostDirectoryIdentity(
+      path.dirname(targetPath),
+      expected.parent,
       validation,
-      0o600,
+      descriptors,
+    );
+    if (expected.file === null && !observedOperations.has("create")) {
+      validation.invalid(
+        "writer produced a missing target without an observed create",
+      );
+    }
+    if (
+      initial !== null &&
+      contents.length < initial.length &&
+      !observedOperations.has("truncate")
+    ) {
+      validation.invalid(
+        "writer shortened the target without truncate authority",
+      );
+    }
+
+    const parent = path.dirname(targetPath);
+    publication.stagingCleanup = "unknown";
+    stagingDirectory = fs.mkdtempSync(
+      path.join(parent, `.gondolin-commit-${randomBytes(8).toString("hex")}-`),
+    );
+    const stagedPath = path.join(stagingDirectory, "payload");
+    const stagedFd = descriptors.open(() =>
+      openNoFollow(
+        stagedPath,
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR,
+        "filesystem staging target",
+        validation,
+        0o600,
+      ),
     );
     let written = 0;
     while (written < contents.length) {
@@ -265,15 +404,26 @@ export function commitExactWriterTarget(
       }
       written += count;
     }
+    const staged = fs.fstatSync(stagedFd, { bigint: true });
+    publication.stagedIdentity = {
+      dev: String(staged.dev),
+      ino: String(staged.ino),
+    };
     fs.fsyncSync(stagedFd);
-    fs.closeSync(stagedFd);
-    stagedFd = null;
+    descriptors.close(stagedFd);
 
+    publication.phase = "prepared";
     hooks.beforePublish?.();
-    verifyHostDirectoryIdentity(parent, expected.parent, validation);
+    verifyHostDirectoryIdentity(
+      parent, expected.parent, validation, descriptors,
+    );
 
     if (expected.file === null) {
+      publication.state = "indeterminate";
+      publication.phase = "publishing";
       fs.linkSync(stagedPath, targetPath);
+      publication.state = "published";
+      publication.phase = "published";
       fs.unlinkSync(stagedPath);
     } else {
       const currentFd = openExactWriterFile(
@@ -282,6 +432,7 @@ export function commitExactWriterTarget(
         fs.constants.O_RDONLY,
         validation,
         false,
+        descriptors,
       );
       try {
         const current = fs.readFileSync(currentFd);
@@ -294,42 +445,99 @@ export function commitExactWriterTarget(
         fs.chownSync(stagedPath, stats.uid, stats.gid);
         fs.chmodSync(stagedPath, stats.mode & 0o7777);
       } finally {
-        fs.closeSync(currentFd);
+        descriptors.close(currentFd);
       }
+      publication.state = "indeterminate";
+      publication.phase = "publishing";
       fs.renameSync(stagedPath, targetPath);
+      publication.state = "published";
+      publication.phase = "published";
     }
 
-    verifyHostDirectoryIdentity(parent, expected.parent, validation);
+    verifyHostDirectoryIdentity(
+      parent, expected.parent, validation, descriptors,
+    );
     const published = fs.lstatSync(targetPath, { bigint: true });
     if (
       !published.isFile() ||
       published.isSymbolicLink() ||
-      published.nlink !== 1n
+      published.nlink !== 1n ||
+      String(published.dev) !== publication.stagedIdentity?.dev ||
+      String(published.ino) !== publication.stagedIdentity?.ino
     ) {
       validation.invalid(
         "filesystem target publication was not an exact regular file",
       );
     }
-    return {
+    const verifiedContents = readExactWriterTarget(
+      targetPath,
+      {
+        parent: expected.parent,
+        file: { dev: published.dev, ino: published.ino },
+      },
+      validation,
+      descriptors,
+    );
+    if (verifiedContents === null || !verifiedContents.equals(contents)) {
+      validation.invalid(
+        "filesystem published target contents changed during verification",
+      );
+    }
+    publication.targetVerification = "verified";
+    publication.phase = "verified";
+    identity = {
       parent: expected.parent,
       file: { dev: published.dev, ino: published.ino },
     };
+  } catch (caught) {
+    failed = true;
+    error = caught;
+    if (publication.state === "published")
+      publication.targetVerification = "failed";
   } finally {
-    if (stagedFd !== null) fs.closeSync(stagedFd);
-    fs.rmSync(stagingDirectory, { recursive: true, force: true });
+    let cleanupFailed = false;
+    for (const fd of descriptors.owned) {
+      try {
+        descriptors.close(fd);
+      } catch (caught) {
+        cleanupFailed = true;
+        if (!failed) error = caught;
+        failed = true;
+      }
+    }
+    if (stagingDirectory !== null) {
+      try {
+        fs.rmSync(stagingDirectory, { recursive: true, force: true });
+      } catch (caught) {
+        cleanupFailed = true;
+        if (!failed) error = caught;
+        failed = true;
+      }
+    }
+    publication.stagingCleanup = cleanupFailed || descriptors.closeFailed
+      ? "failed"
+      : descriptors.ambiguousOpen ||
+          (stagingDirectory === null &&
+            publication.stagingCleanup === "unknown")
+        ? "unknown"
+        : "verified";
   }
+  return { publication, identity, failed, ...(failed ? { error } : {}) };
 }
 
 function getHostDirectoryIdentity(
   directoryPath: string,
   validation: CapabilityFilesystemValidation,
+  descriptors?: PublicationDescriptors,
 ): HostFileIdentity {
   let fd: number;
   try {
-    fd = fs.openSync(
-      directoryPath,
-      fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0),
-    );
+    const open = () =>
+      fs.openSync(
+        directoryPath,
+        fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY ?? 0),
+      );
+    fd = descriptors ? descriptors.open(open) : open();
   } catch {
     validation.invalid(
       "filesystem target parent changed or could not be opened",
@@ -342,7 +550,8 @@ function getHostDirectoryIdentity(
     }
     return { dev: stats.dev, ino: stats.ino };
   } finally {
-    fs.closeSync(fd!);
+    if (descriptors) descriptors.close(fd!);
+    else fs.closeSync(fd!);
   }
 }
 
@@ -350,8 +559,11 @@ function verifyHostDirectoryIdentity(
   directoryPath: string,
   expected: HostFileIdentity,
   validation: CapabilityFilesystemValidation,
+  descriptors?: PublicationDescriptors,
 ): void {
-  const actual = getHostDirectoryIdentity(directoryPath, validation);
+  const actual = getHostDirectoryIdentity(
+    directoryPath, validation, descriptors,
+  );
   if (actual.dev !== expected.dev || actual.ino !== expected.ino) {
     validation.invalid(
       "filesystem target parent identity changed after ceiling creation",
@@ -365,21 +577,32 @@ function openExactWriterFile(
   access: number,
   validation: CapabilityFilesystemValidation,
   requireSingleLink: boolean,
+  descriptors?: PublicationDescriptors,
 ): number {
-  const fd = openNoFollow(targetPath, access, "filesystem target", validation);
-  const stats = fs.fstatSync(fd, { bigint: true });
-  if (
-    !stats.isFile() ||
-    (requireSingleLink && stats.nlink !== 1n) ||
-    stats.dev !== expected.dev ||
-    stats.ino !== expected.ino
-  ) {
-    fs.closeSync(fd);
-    validation.invalid(
-      "filesystem target identity changed after ceiling creation",
-    );
+  const open = () =>
+    openNoFollow(targetPath, access, "filesystem target", validation);
+  const fd = descriptors ? descriptors.open(open) : open();
+  let validated = false;
+  try {
+    const stats = fs.fstatSync(fd, { bigint: true });
+    if (
+      !stats.isFile() ||
+      (requireSingleLink && stats.nlink !== 1n) ||
+      stats.dev !== expected.dev ||
+      stats.ino !== expected.ino
+    ) {
+      validation.invalid(
+        "filesystem target identity changed after ceiling creation",
+      );
+    }
+    validated = true;
+    return fd;
+  } finally {
+    if (!validated) {
+      if (descriptors) descriptors.close(fd);
+      else fs.closeSync(fd);
+    }
   }
-  return fd;
 }
 
 function openNoFollow(

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import crypto, { createHash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -7,6 +8,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  verifyCapabilityInvocationResult,
   CAPABILITY_CEILING_SCHEMA_VERSION,
   CAPABILITY_INVOCATION_SCHEMA_VERSION,
   CapabilityAdmissionError,
@@ -951,6 +953,9 @@ for (const initiallyExists of [true, false]) {
           ),
         );
         assert.equal(result.evidence.teardown.vmStopped, true);
+        assert.equal(result.evidence.publication?.state, "not_published");
+        assert.equal(result.evidence.publication?.phase, "not_attempted");
+        assert.deepEqual(verifyCapabilityInvocationResult(result).errors, []);
         if (initiallyExists)
           assert.equal(fs.readFileSync(target, "utf8"), "original");
         else assert.equal(fs.existsSync(target), false);
@@ -960,6 +965,145 @@ for (const initiallyExists of [true, false]) {
             ? `sha256:${createHash("sha256").update("original").digest("hex")}`
             : null,
         );
+      },
+    );
+  }
+}
+
+for (const initiallyExists of [true, false]) {
+  for (const fault of [
+    "cleanup",
+    "verification",
+    "visibility",
+    "signing",
+    "unlink",
+  ]) {
+    test(
+      `public writer preserves ${fault} settlement after real guest execution, exists=${initiallyExists}`,
+      { skip: shouldSkipVmTests(), timeout: 120_000 },
+      async (t) => {
+        const directory = fs.mkdtempSync(path.join(tempRoot, "settlement-"));
+        const target = path.join(directory, "output.txt");
+        const other = path.join(directory, "other.txt");
+        if (initiallyExists) fs.writeFileSync(target, "original");
+        fs.writeFileSync(other, "unrelated");
+        const context = CapabilityInvocationContext.create(
+          writerCeiling([target, other]),
+          { console: "stdio" },
+        );
+        const request = writerRequest(target, {
+          invocationId: `settlement-${fault}-${initiallyExists}`,
+          launch: {
+            executable: "/bin/busybox",
+            args: ["sh", "-c", "printf final-output > /data/output.txt"],
+          },
+        });
+        if (!initiallyExists)
+          request.capabilities.filesystem.operations.push("create");
+        let visible = false;
+        const primitive = initiallyExists ? "renameSync" : "linkSync";
+        const publish = fs[primitive];
+        t.mock.method(fs, primitive, (...args: Parameters<typeof publish>) => {
+          publish(...args);
+          if (String(args[1]) === target) {
+            visible = true;
+            if (fault === "visibility")
+              throw new Error("injected lost syscall result");
+          }
+        });
+        const remove = fs.rmSync;
+        if (fault === "cleanup")
+          t.mock.method(fs, "rmSync", (...args: Parameters<typeof remove>) => {
+            if (
+              String(args[0]).startsWith(
+                directory + path.sep + ".gondolin-commit-",
+              )
+            )
+              throw new Error("injected staging cleanup failure");
+            return remove(...args);
+          });
+        const stat = fs.lstatSync;
+        if (fault === "verification")
+          t.mock.method(fs, "lstatSync", (...args: Parameters<typeof stat>) => {
+            if (visible && String(args[0]) === target)
+              throw new Error("injected verification failure");
+            return stat(...args);
+          });
+        const unlink = fs.unlinkSync;
+        if (fault === "unlink")
+          t.mock.method(
+            fs,
+            "unlinkSync",
+            (...args: Parameters<typeof unlink>) => {
+              if (
+                visible &&
+                String(args[0]).startsWith(
+                  directory + path.sep + ".gondolin-commit-",
+                )
+              )
+                throw new Error("injected unlink failure");
+              return unlink(...args);
+            },
+          );
+        if (fault === "signing") {
+          const sign = crypto.sign;
+          t.mock.method(crypto, "sign", (...args: Parameters<typeof sign>) => {
+            if (visible) throw new Error("injected signing failure");
+            return sign(...args);
+          });
+          syncBuiltinESMExports();
+        }
+        t.after(() => {
+          t.mock.restoreAll();
+          syncBuiltinESMExports();
+          remove(directory, { recursive: true, force: true });
+        });
+        if (fault === "signing") {
+          await assert.rejects(
+            context.invoke(request),
+            /injected signing failure/,
+          );
+        } else {
+          const result = await context.invoke(request);
+          assert.equal(
+            result.outcome,
+            fault === "cleanup"
+              ? "teardown_failure"
+              : fault === "unlink" && initiallyExists
+                ? "success"
+                : "commit_failure",
+            result.error,
+          );
+          assert.deepEqual(verifyCapabilityInvocationResult(result).errors, []);
+          assert.equal(
+            result.evidence.publication?.state,
+            fault === "visibility" ? "indeterminate" : "published",
+          );
+          assert.equal(
+            result.evidence.publication?.stagingCleanup,
+            fault === "cleanup" ? "failed" : "verified",
+          );
+          assert.equal(
+            result.evidence.teardown.ephemeralStateDestroyed,
+            fault !== "cleanup",
+          );
+        }
+        assert.equal(fs.readFileSync(target, "utf8"), "final-output");
+        assert.equal(fs.readFileSync(other, "utf8"), "unrelated");
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        if (!(fault === "unlink" && initiallyExists)) {
+          await assert.rejects(
+            context.invoke({ ...request, invocationId: "retry-uncertain" }),
+            /no identity/,
+          );
+        }
+        const fresh = await context.invoke(
+          writerRequest(other, { invocationId: "fresh-other-target" }),
+        );
+        assert.equal(fresh.outcome, "success", fresh.error);
+        assert.equal(fresh.evidence.publication?.state, "published");
+        assert.deepEqual(verifyCapabilityInvocationResult(fresh).errors, []);
       },
     );
   }
