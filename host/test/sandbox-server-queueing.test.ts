@@ -639,3 +639,23 @@ test("allocateFileOpId does not reuse active guest exec ids", () => {
   const id = (server as any).allocateFileOpId();
   assert.equal(id, 2);
 });
+
+test("network settlement failure does not skip runner and filesystem cleanup", async () => {
+  const server = new SandboxServer(makeResolvedOptions());
+  const closed: string[] = [];
+  (server as any).network = {
+    close: async () => {
+      throw new Error("network settlement failed");
+    },
+  };
+  (server as any).controller.close = async () => {
+    closed.push("runner");
+  };
+  (server as any).fsService = {
+    close: async () => {
+      closed.push("filesystem");
+    },
+  };
+  await assert.rejects(server.close(), /network settlement failed/);
+  assert.deepEqual(closed, ["runner", "filesystem"]);
+});

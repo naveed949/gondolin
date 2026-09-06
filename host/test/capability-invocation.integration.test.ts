@@ -664,7 +664,7 @@ test(
       assert.equal(result.evidence.teardown.networkChannelsClosed, true);
       assert.equal(
         result.evidence.policyVersions.network,
-        "http-tls-mediator/v1",
+        "http-tls-mediator/v2",
       );
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
