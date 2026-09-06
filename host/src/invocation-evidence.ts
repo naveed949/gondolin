@@ -4,7 +4,7 @@ import { getAssetVersion } from "./assets.ts";
 import { deepFreeze, sha256, stableJson } from "./canonical-json.ts";
 
 export const CAPABILITY_EVIDENCE_SCHEMA_VERSION =
-  "gondolin.capability-evidence/v2" as const;
+  "gondolin.capability-evidence/v3" as const;
 export const CAPABILITY_FEATURE_SCHEMA_VERSION =
   "gondolin.capability-features/v2" as const;
 export const EXECUTION_IDENTITY_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -450,6 +450,7 @@ function verifyCapabilityInvocationEvidenceInternal(
   if (input.qualificationId !== computedQualification) {
     errors.push("runtime and policy qualification identity mismatch");
   }
+  verifyPublication(input, errors);
   verifyEffects(input, errors);
   verifyTeardown(input, errors);
   return {
@@ -558,6 +559,150 @@ function qualificationForEvidence(evidence: Record<string, unknown>): string {
     runtime: evidence.runtime,
     policyVersions: evidence.policyVersions,
   });
+}
+
+function verifyPublication(
+  evidence: Record<string, unknown>,
+  errors: string[],
+): void {
+  const writer =
+    isRecord(evidence.policyVersions) &&
+    evidence.policyVersions.admission === "exact-writer/v1";
+  const publication = evidence.publication;
+  if (!writer) {
+    if (publication !== null)
+      errors.push("non-writer publication must be null");
+    return;
+  }
+  if (!isRecord(publication)) {
+    errors.push("writer publication evidence is missing");
+    return;
+  }
+  const digest = (value: unknown) =>
+    typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
+  const fileIdentity = (value: unknown) =>
+    isRecord(value) &&
+    typeof value.dev === "string" &&
+    /^\d+$/.test(value.dev) &&
+    typeof value.ino === "string" &&
+    /^\d+$/.test(value.ino);
+  const target = publication.expectedTarget;
+  if (
+    publication.schemaVersion !== "gondolin.exact-writer-publication/v1" ||
+    ![
+      "state",
+      "phase",
+      "primitive",
+      "targetVerification",
+      "stagingCleanup",
+    ].every((key) => typeof publication[key] === "string") ||
+    !["not_published", "published", "indeterminate"].includes(
+      String(publication.state),
+    ) ||
+    ![
+      "not_attempted",
+      "preparing",
+      "prepared",
+      "publishing",
+      "published",
+      "verified",
+    ].includes(String(publication.phase)) ||
+    !["link", "rename"].includes(String(publication.primitive)) ||
+    !isRecord(target) ||
+    !fileIdentity(target.parent) ||
+    !(target.file === null || fileIdentity(target.file)) ||
+    !(
+      publication.stagedIdentity === null ||
+      fileIdentity(publication.stagedIdentity)
+    ) ||
+    !(
+      publication.initialDigest === null || digest(publication.initialDigest)
+    ) ||
+    !(
+      publication.preparedDigest === null || digest(publication.preparedDigest)
+    ) ||
+    !["verified", "failed", "unknown"].includes(
+      String(publication.targetVerification),
+    ) ||
+    !["verified", "failed", "unknown"].includes(
+      String(publication.stagingCleanup),
+    ) ||
+    publication.durability !== "unknown" ||
+    publication.evidenceFinalization !== "unknown"
+  ) {
+    errors.push("writer publication evidence is malformed");
+    return;
+  }
+  if (
+    publication.initialDigest !== evidence.inputDigest ||
+    (target.file === null) !== (publication.initialDigest === null) ||
+    publication.primitive !== (target.file === null ? "link" : "rename")
+  ) {
+    errors.push("writer publication input binding mismatch");
+  }
+  if (
+    (publication.state === "published") !==
+      ["published", "verified"].includes(String(publication.phase)) ||
+    (publication.state === "indeterminate") !==
+      (publication.phase === "publishing") ||
+    (publication.targetVerification === "verified") !==
+      (publication.phase === "verified") ||
+    (publication.phase === "not_attempted" &&
+      (publication.preparedDigest !== null ||
+        publication.stagedIdentity !== null ||
+        publication.stagingCleanup !== "verified")) ||
+    (publication.phase !== "not_attempted" &&
+      publication.preparedDigest === null) ||
+    (["prepared", "publishing", "published", "verified"].includes(
+      String(publication.phase),
+    ) &&
+      publication.stagedIdentity === null) ||
+    (publication.state !== "published" &&
+      publication.targetVerification !== "unknown") ||
+    (publication.state !== "not_published" &&
+      (publication.preparedDigest === null ||
+        publication.stagedIdentity === null))
+  ) {
+    errors.push("writer publication phase is inconsistent");
+  }
+  if (
+    publication.stagingCleanup !== "verified" &&
+    (!isRecord(evidence.teardown) ||
+      evidence.teardown.ephemeralStateDestroyed !== false)
+  ) {
+    errors.push("host staging cleanup conflicts with ephemeral teardown");
+  }
+  const observedMutation =
+    Array.isArray(evidence.observed) &&
+    evidence.observed.some(
+      (effect) =>
+        isRecord(effect) &&
+        ["create", "write", "truncate"].includes(String(effect.operation)),
+    );
+  if (
+    evidence.outcome === "success" &&
+    ((observedMutation && publication.state !== "published") ||
+      (!observedMutation && publication.phase !== "not_attempted") ||
+      publication.state === "indeterminate" ||
+      publication.stagingCleanup !== "verified" ||
+      (publication.state === "published" &&
+        (publication.targetVerification !== "verified" ||
+          evidence.outputDigest !== publication.preparedDigest)))
+  ) {
+    errors.push("successful writer has unsettled publication");
+  }
+  if (
+    evidence.outputDigest !== null &&
+    evidence.outputDigest !==
+      (publication.state === "published" &&
+      publication.targetVerification === "verified"
+        ? publication.preparedDigest
+        : publication.state === "not_published"
+          ? publication.initialDigest
+          : null)
+  ) {
+    errors.push("writer output digest publication provenance mismatch");
+  }
 }
 
 function verifyEffects(

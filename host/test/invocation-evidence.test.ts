@@ -179,6 +179,7 @@ function fixture(
   identity.finish("completed", true);
   const evidence = sealCapabilityEvidence({
     schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+    publication: null,
     capabilitySchemaVersion: CAPABILITY_INVOCATION_SCHEMA_VERSION,
     gondolinVersion: gondolinVersion(),
     decision: "admitted" as const,
@@ -210,6 +211,10 @@ function fixture(
 test("feature manifest versions and advertises authenticated evidence", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
   assert.equal(manifest.schemaVersion, CAPABILITY_FEATURE_SCHEMA_VERSION);
+  assert.equal(
+    manifest.evidenceSchemas["gondolin.capability-evidence/v2"],
+    "unsupported",
+  );
   assert.equal(
     manifest.evidenceSchemas[CAPABILITY_EVIDENCE_SCHEMA_VERSION],
     "active",
@@ -472,3 +477,20 @@ for (const decision of ["allowed", "denied", "unknown"] as const) {
     );
   });
 }
+
+test("legacy evidence and writer records on reader evidence fail closed even when resealed", () => {
+  const result = fixture();
+  const { integrity: _, ...unsigned } = result.evidence;
+  for (const change of [
+    { schemaVersion: "gondolin.capability-evidence/v2" },
+    { publication: {} },
+  ]) {
+    assert.equal(
+      verifyCapabilityInvocationResult({
+        ...result,
+        evidence: sealCapabilityEvidence({ ...unsigned, ...change }),
+      }).valid,
+      false,
+    );
+  }
+});

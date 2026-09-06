@@ -335,3 +335,5 @@ export {
   type BuildOptions,
   type BuildResult,
 } from "./build/index.ts";
+
+export type { ExactWriterPublication } from "./capability-filesystem.ts";

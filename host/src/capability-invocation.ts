@@ -32,7 +32,9 @@ import {
 import {
   canonicalHostFile,
   canonicalHostTarget,
-  commitExactWriterTarget,
+  settleExactWriterTarget,
+  unpublishedWriterPublication,
+  type ExactWriterPublication,
   getHostFileIdentity,
   getHostWriterTargetIdentity,
   readExactHostFile,
@@ -641,6 +643,8 @@ export type CapabilityInvocationEvidence = {
   inputDigest: string | null;
   /** SHA-256 of final exact-target bytes for writer invocations */
   outputDigest: string | null;
+  /** Historical host publication settlement, or `null` for non-writer profiles */
+  publication: ExactWriterPublication | null;
   /** Effects expressed by the admitted request */
   requested: CapabilityEffect[];
   /** Effects granted after ceiling intersection */
@@ -725,6 +729,7 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
   evidenceSchemas: {
     [CAPABILITY_EVIDENCE_SCHEMA_VERSION]: "active",
     "gondolin.capability-evidence/v1": "unsupported",
+    "gondolin.capability-evidence/v2": "unsupported",
     "future-schema": "unsupported",
   },
   profiles: {
@@ -1469,6 +1474,7 @@ export class CapabilityInvocationContext {
       qualificationId,
       policyVersions,
       inputDigest,
+      publication: null,
       outputDigest: inputDigest,
       requested,
       granted,
@@ -1507,6 +1513,8 @@ export class CapabilityInvocationContext {
         "filesystem target has no identity in the immutable ceiling",
       );
     }
+    // Reserve the pin before any await; an exception or missing result leaves it invalid.
+    this.targetIdentities.delete(targetPath);
     const initial = readExactWriterTarget(
       targetPath,
       targetIdentity,
@@ -1697,6 +1705,8 @@ export class CapabilityInvocationContext {
     const teardownComplete =
       vm !== null && closeError === null && runnerStopped;
     let finalContents: Buffer | null = initial;
+    let publication = unpublishedWriterPublication(targetIdentity, initial);
+    let nextTargetIdentity: HostWriterTargetIdentity | null = targetIdentity;
     if (admissionError && teardownComplete) {
       identity.finish("revoked", true);
       throw admissionError;
@@ -1718,7 +1728,7 @@ export class CapabilityInvocationContext {
     ) {
       try {
         finalContents = await readProviderFile(provider, relativeGuestPath);
-        const publishedIdentity = commitExactWriterTarget(
+        const settlement = settleExactWriterTarget(
           targetPath,
           targetIdentity,
           initial,
@@ -1731,18 +1741,25 @@ export class CapabilityInvocationContext {
           {},
           capabilityFilesystemValidation,
         );
-        this.targetIdentities.set(targetPath, publishedIdentity);
+        publication = settlement.publication;
+        nextTargetIdentity = settlement.identity;
+        if (settlement.failed) throw settlement.error;
       } catch (caught) {
         outcome = "commit_failure";
         error = safeError(caught);
         finalContents = null;
+        nextTargetIdentity = null;
       }
     }
-    if (!teardownComplete) {
+    const allEphemeralStateDestroyed =
+      teardownComplete && publication.stagingCleanup === "verified";
+    if (!allEphemeralStateDestroyed) {
       outcome = "teardown_failure";
       error = closeError
         ? safeError(closeError)
-        : "VM teardown could not be confirmed";
+        : publication.stagingCleanup !== "verified"
+          ? "host staging cleanup could not be confirmed"
+          : "VM teardown could not be confirmed";
     }
 
     const settledAt = new Date().toISOString();
@@ -1761,8 +1778,8 @@ export class CapabilityInvocationContext {
       vmStopped: teardownComplete,
       vfsHandlesRevoked: teardownComplete,
       policyRemoved: teardownComplete,
-      ephemeralStateDestroyed: teardownComplete,
-      completedAt: teardownComplete ? settledAt : null,
+      ephemeralStateDestroyed: allEphemeralStateDestroyed,
+      completedAt: allEphemeralStateDestroyed ? settledAt : null,
     };
 
     const resultWithoutEvidence = {
@@ -1789,8 +1806,8 @@ export class CapabilityInvocationContext {
       policyVersions,
     });
     identity.finish(
-      teardownComplete ? "completed" : "revoked",
-      teardownComplete,
+      allEphemeralStateDestroyed ? "completed" : "revoked",
+      allEphemeralStateDestroyed,
     );
     const evidence = sealCapabilityEvidence({
       schemaVersion: CAPABILITY_EVIDENCE_SCHEMA_VERSION,
@@ -1807,6 +1824,7 @@ export class CapabilityInvocationContext {
       qualificationId,
       policyVersions,
       inputDigest,
+      publication,
       outputDigest: finalContents === null ? null : sha256(finalContents),
       requested,
       granted,
@@ -1819,6 +1837,15 @@ export class CapabilityInvocationContext {
       teardown,
       resultDigest: capabilityResultDigest(resultWithoutEvidence),
     });
+    // Never restore a pin after ambiguous publication, stale-target failure,
+    // incomplete cleanup, or a failure while producing the authenticated result.
+    if (
+      nextTargetIdentity &&
+      allEphemeralStateDestroyed &&
+      publication.state !== "indeterminate"
+    ) {
+      this.targetIdentities.set(targetPath, nextTargetIdentity);
+    }
     return {
       ...resultWithoutEvidence,
       evidence,
