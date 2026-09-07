@@ -4,6 +4,8 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.7
+
 - Report unavailable scoped-runner guest memory/PID measurements as null instead
   of fabricated zeroes. Reject successful settlement without valid guest resource
   accounting and bind the nullable contract to resource policy v2. Independent
