@@ -269,7 +269,7 @@ export type ScopedRunnerInvocationEvidence = {
     /** Process policy version */
     process: "exact-mount-landlock/v1";
     /** Resource policy version */
-    resources: "qemu-cgroup-vfs/v1";
+    resources: "qemu-cgroup-vfs/v2";
     /** Lifecycle policy version */
     lifecycle: "one-shot-qemu/v1";
   };
@@ -344,10 +344,10 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
   usage: {
     /** Last host-observed QEMU CPU lower bound in `ms`, or `null` if unavailable */
     cpuTimeMs: number | null;
-    /** Guest-cgroup peak complete-tree memory in `bytes` */
-    memoryPeakBytes: number;
-    /** Guest-cgroup peak simultaneous process-tree members */
-    pidsPeak: number;
+    /** Guest-cgroup peak complete-tree memory in `bytes`, or `null` when unavailable */
+    memoryPeakBytes: number | null;
+    /** Guest-cgroup peak simultaneous process-tree members, or `null` when unavailable */
+    pidsPeak: number | null;
     /** Host-observed aggregate writable state in `bytes` */
     writableStorageBytes: number;
     /** Host-observed combined stdout and stderr in `bytes` */
@@ -365,9 +365,9 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
     /** CPU accounting source */
     cpu: "host-qemu-process" | "host-qemu-process-incomplete" | "unavailable";
     /** Memory accounting source */
-    memory: "guest-reported-cgroup-v2";
+    memory: "guest-reported-cgroup-v2" | "unavailable";
     /** Process accounting source */
-    pids: "guest-reported-cgroup-v2";
+    pids: "guest-reported-cgroup-v2" | "unavailable";
     /** Writable storage accounting source */
     storage: "host-vfs";
     /** Output accounting source */
@@ -766,8 +766,8 @@ export class ScopedRunnerInvocationContext {
       );
       commandStopped = true;
       exitCode = result.exitCode;
-      guestUsage = result.resourceUsage;
-      if (result.resourceUsage?.descendantDenied === true) {
+      guestUsage = validGuestResourceUsage(result.resourceUsage) ? result.resourceUsage : undefined;
+      if (guestUsage?.descendantDenied === true) {
         processEvents.push({
           ...identity.authenticate(vmId),
           domain: "process",
@@ -776,12 +776,12 @@ export class ScopedRunnerInvocationContext {
           observedAt: new Date().toISOString(),
         });
       }
-      if ((result.resourceUsage?.pidsPeak ?? 0) > 1) {
+      if ((guestUsage?.pidsPeak ?? 0) > 1) {
         processEvents.push({
           ...identity.authenticate(vmId),
           domain: "process",
           kind: "descendant",
-          detail: `guest cgroup observed a complete-tree peak of ${result.resourceUsage!.pidsPeak} processes`,
+          detail: `guest cgroup observed a complete-tree peak of ${guestUsage!.pidsPeak} processes`,
           observedAt: new Date().toISOString(),
         });
       }
@@ -812,9 +812,9 @@ export class ScopedRunnerInvocationContext {
         observedAt: new Date().toISOString(),
       });
       outcome =
-        result.resourceUsage?.descendantDenied === true
+        guestUsage?.descendantDenied === true
           ? "policy_denied"
-          : (resourceOutcome(result.resourceUsage?.exhausted) ??
+          : (resourceOutcome(guestUsage?.exhausted) ??
             (storage.exhausted
               ? "storage_exhausted"
               : output.overflowed
@@ -909,6 +909,14 @@ export class ScopedRunnerInvocationContext {
     } else if (hostCpuExhausted && outcome === "success") {
       outcome = "cpu_exhausted";
     }
+    if (guestUsage === undefined && commandDispatched) {
+      const observationError = "guest resource accounting unavailable or malformed";
+      processEvents.push(lifecycleEvent(identity, "policy", observationError));
+      if (outcome === "success") {
+        outcome = "host_controller_failure";
+        error = observationError;
+      }
+    }
     if (!teardownComplete) {
       outcome = "teardown_failure";
       error = closeError
@@ -938,8 +946,8 @@ export class ScopedRunnerInvocationContext {
       limits: request.limits,
       usage: {
         cpuTimeMs: hostCpuTimeMs,
-        memoryPeakBytes: guestUsage?.memoryPeakBytes ?? 0,
-        pidsPeak: guestUsage?.pidsPeak ?? 0,
+        memoryPeakBytes: guestUsage?.memoryPeakBytes ?? null,
+        pidsPeak: guestUsage?.pidsPeak ?? null,
         writableStorageBytes: storage.usedBytes,
         outputBytes: output.acceptedBytes,
         wallTimeMs,
@@ -956,8 +964,8 @@ export class ScopedRunnerInvocationContext {
           : cpuObservationFailed
             ? "host-qemu-process-incomplete"
             : "host-qemu-process",
-        memory: "guest-reported-cgroup-v2",
-        pids: "guest-reported-cgroup-v2",
+        memory: guestUsage ? "guest-reported-cgroup-v2" : "unavailable",
+        pids: guestUsage ? "guest-reported-cgroup-v2" : "unavailable",
         storage: "host-vfs",
         output: "host-exec-channel",
         wallTime: "host-monotonic-clock",
@@ -1003,7 +1011,7 @@ export class ScopedRunnerInvocationContext {
       admission: "scoped-runner/v1" as const,
       filesystem: "exact-ephemeral-vfs/v1" as const,
       process: "exact-mount-landlock/v1" as const,
-      resources: "qemu-cgroup-vfs/v1" as const,
+      resources: "qemu-cgroup-vfs/v2" as const,
       lifecycle: "one-shot-qemu/v1" as const,
     };
     const qualificationId = capabilityQualificationId({
@@ -1058,6 +1066,16 @@ type ResourcePolicy = {
   guestPath: string;
   operations: Set<string>;
 };
+
+function validGuestResourceUsage(value: unknown): value is import("./exec.ts").ExecResourceUsage {
+  if (value === null || typeof value !== "object") return false;
+  const usage = value as Record<string, unknown>;
+  return [usage.cpuTimeMs, usage.memoryPeakBytes, usage.pidsPeak].every(
+    (measurement) => typeof measurement === "number" && Number.isSafeInteger(measurement) && measurement >= 0,
+  ) && (usage.exhausted === null || usage.exhausted === "cpu" || usage.exhausted === "memory" || usage.exhausted === "pids")
+    && typeof usage.resourceGroupRemoved === "boolean"
+    && (usage.descendantDenied === undefined || typeof usage.descendantDenied === "boolean");
+}
 
 class WritableStorageBudget {
   readonly limit: number;

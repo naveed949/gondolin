@@ -813,6 +813,21 @@ function verifyEffects(
       );
     }
     sequences.add(sequence);
+    if (isRecord(evidence.policyVersions) && evidence.policyVersions.resources === "qemu-cgroup-vfs/v2") {
+      const usage = resources.usage;
+      const observations = resources.observations;
+      for (const [metric, domain] of [["memoryPeakBytes", "memory"], ["pidsPeak", "pids"]] as const) {
+        const value = isRecord(usage) ? usage[metric] : undefined;
+        const source = isRecord(observations) ? observations[domain] : undefined;
+        const available = typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+        if (!(available && source === "guest-reported-cgroup-v2") && !(value === null && source === "unavailable")) {
+          errors.push(`resource ${domain} observation is inconsistent`);
+        }
+        if (evidence.outcome === "success" && !available) {
+          errors.push(`successful execution lacks ${domain} accounting`);
+        }
+      }
+    }
   }
   if (
     isRecord(evidence.policyVersions) &&

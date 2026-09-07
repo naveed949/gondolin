@@ -54,3 +54,15 @@ platform/performance checks must run against the exact new package/image
 hashes. A Linux result cannot qualify macOS, and local unit tests with a fake VM
 exercise settlement logic only. Tickets must remain open until the positive
 canonical contracts and released-runtime evidence exist.
+
+## Missing guest resource observations
+
+The unreleased `qemu-cgroup-vfs/v2` accounting policy reports memory and PID
+peaks as `null`, with observation source `unavailable`, when guest accounting
+is absent or malformed. A measured zero remains zero. Missing required
+accounting cannot yield success; independently known execution failures retain
+their outcome, and teardown failure retains precedence. The evidence verifier
+checks these measurement/source pairs and rejects success with unavailable
+accounting. This changes the scoped-runner policy and qualification identity;
+existing release pins do not inherit it. Guest reports remain guest observations,
+not independent host qualification.
