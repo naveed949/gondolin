@@ -171,14 +171,26 @@ test(
       );
       assert.deepEqual(result.evidence.resources, result.resourceAccounting);
       assert.equal(result.resourceAccounting.exhausted, exhausted);
-      assert.equal(
-        result.resourceAccounting.observations.memory,
-        "guest-reported-cgroup-v2",
-      );
-      assert.equal(
-        result.resourceAccounting.observations.pids,
-        "guest-reported-cgroup-v2",
-      );
+      const accounting = result.resourceAccounting;
+      // Host termination may interrupt sandboxd before its final usage response.
+      // A racing complete response is valid, but absent data is never a zero.
+      const hostInterrupted = accounting.exhaustionObservation === "host-observed" &&
+        (exhausted === "cpu" || exhausted === "storage" ||
+          exhausted === "output" || exhausted === "wall-time");
+      assert.equal(accounting.observations.memory, accounting.observations.pids);
+      for (const [metric, domain] of [
+        ["memoryPeakBytes", "memory"],
+        ["pidsPeak", "pids"],
+      ] as const) {
+        const measurement = accounting.usage[metric];
+        if (hostInterrupted && accounting.observations[domain] === "unavailable") {
+          assert.equal(measurement, null);
+        } else {
+          assert.equal(accounting.observations[domain], "guest-reported-cgroup-v2");
+          assert.ok(typeof measurement === "number" &&
+            Number.isSafeInteger(measurement) && measurement >= 0);
+        }
+      }
       if (exhausted === "memory" || exhausted === "pids") {
         assert.equal(
           result.resourceAccounting.exhaustionObservation,

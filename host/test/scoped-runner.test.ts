@@ -8,6 +8,7 @@ import {
   CAPABILITY_CEILING_SCHEMA_VERSION,
   CAPABILITY_INVOCATION_SCHEMA_VERSION,
   CapabilityAdmissionError,
+  verifyCapabilityInvocationEvidence,
   SCOPED_RUNNER_GUARANTEES,
   ScopedRunnerInvocationContext,
   canonicalizeScopedRunnerInvocationRequest,
@@ -18,6 +19,7 @@ import {
 import { buildExecRequest } from "../src/sandbox/virtio-protocol.ts";
 import { __test } from "../src/scoped-runner.ts";
 import { VM } from "../src/vm/core.ts";
+import { sealCapabilityEvidence } from "../src/invocation-evidence.ts";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-runner-"));
 const sourcePath = path.join(tempRoot, "source.ts");
@@ -556,7 +558,7 @@ test("CPU observation fails permanently on missing samples, reused PIDs, or coun
 });
 
 test("scoped invocation settles CPU observation failures and captures its final sample before teardown", async (t) => {
-  for (const scenario of ["lost-observer", "final-budget", "startup-failure", "guest-crash"] as const) {
+  for (const scenario of ["lost-observer", "final-budget", "startup-failure", "guest-crash", "missing-usage", "malformed-usage", "valid-zero-usage", "failed-command-missing-usage"] as const) {
     await t.test(scenario, async (t) => {
       let closed = false;
       let samples = 0;
@@ -565,7 +567,7 @@ test("scoped invocation settles CPU observation failures and captures its final 
         assert.equal(closed, false, "CPU samples must precede VM teardown");
         samples++;
         return samples === 1 ? { cpuMs: 100, startTicks: "50" }
-          : (scenario === "lost-observer" || scenario === "guest-crash") ? null : { cpuMs: 6100, startTicks: "50" };
+          : (scenario === "lost-observer" || scenario === "guest-crash") ? null : { cpuMs: scenario === "final-budget" ? 6100 : 100, startTicks: "50" };
       });
       t.mock.method(__test.HostCpuObserver, "create", () => observer);
       t.mock.method(VM, "create", async () => ({
@@ -596,7 +598,12 @@ test("scoped invocation settles CPU observation failures and captures its final 
             });
           }
           // Even a racing successful exit cannot conceal lost enforcement.
-          return { exitCode: 0 };
+          return { exitCode: scenario === "failed-command-missing-usage" ? 1 : 0,
+            ...(scenario === "valid-zero-usage" || scenario === "malformed-usage" ? {
+              resourceUsage: { cpuTimeMs: 0, memoryPeakBytes: scenario === "malformed-usage" ? -1 : 0,
+                pidsPeak: 0, exhausted: null, resourceGroupRemoved: true },
+            } : {}),
+          };
         },
         close: async () => { closed = true; },
       }) as unknown as VM);
@@ -617,12 +624,38 @@ test("scoped invocation settles CPU observation failures and captures its final 
         assert.equal(result.resourceAccounting.usage.cpuTimeMs, 0);
         assert.equal(result.resourceAccounting.observations.cpu, "host-qemu-process-incomplete");
         assert.match(result.error!, /unit crashed VM/);
+      } else if (scenario === "valid-zero-usage") {
+        assert.equal(result.outcome, "success");
+      } else if (scenario === "failed-command-missing-usage") {
+        assert.equal(result.outcome, "command_failed");
+      } else if (scenario === "missing-usage" || scenario === "malformed-usage") {
+        assert.equal(result.outcome, "host_controller_failure");
+        assert.match(result.error!, /guest resource accounting unavailable or malformed/);
       } else {
         assert.equal(result.outcome, "host_controller_failure");
         assert.equal(result.resourceAccounting.usage.cpuTimeMs, null);
         assert.equal(result.resourceAccounting.observations.cpu, "unavailable");
       }
+      assert.equal(result.resourceAccounting.usage.memoryPeakBytes, scenario === "valid-zero-usage" ? 0 : null);
+      assert.equal(result.resourceAccounting.usage.pidsPeak, scenario === "valid-zero-usage" ? 0 : null);
+      assert.equal(result.resourceAccounting.observations.memory, scenario === "valid-zero-usage" ? "guest-reported-cgroup-v2" : "unavailable");
+      assert.equal(result.resourceAccounting.observations.pids, scenario === "valid-zero-usage" ? "guest-reported-cgroup-v2" : "unavailable");
+      assert.equal(result.evidence.policyVersions.resources, "qemu-cgroup-vfs/v2");
       assert.deepEqual(result.evidence.resources, result.resourceAccounting);
+      const verification = verifyCapabilityInvocationEvidence(result.evidence);
+      assert.equal(verification.valid, true, verification.errors.join("; "));
+      if (scenario === "missing-usage") {
+        for (const dishonest of ["fabricated-source", "success-without-measurement"]) {
+          const forged = structuredClone(result.evidence);
+          if (dishonest === "fabricated-source") forged.resources.observations.memory = "guest-reported-cgroup-v2";
+          else forged.outcome = "success";
+          const { integrity: _integrity, ...payload } = forged;
+          const resealed = sealCapabilityEvidence(payload);
+          const checked = verifyCapabilityInvocationEvidence(resealed);
+          assert.equal(checked.valid, false);
+          assert.ok(checked.errors.some((error) => /resource memory observation|lacks memory accounting/.test(error)));
+        }
+      }
     });
   }
 });
