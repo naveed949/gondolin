@@ -1561,12 +1561,21 @@ const ResourceGroup = struct {
             .memory_oom_kill = null,
             .pids_max = try resource_observation.counter(try readGroupControl(self.path, "pids.events"), "max"),
         };
+        var observed_exhaustion: ?protocol.ExecResourceExhaustion = null;
+        defer if (self.exhausted == null) {
+            self.exhausted = observed_exhaustion;
+        };
+        self.recordExhaustion(sample, &observed_exhaustion);
         if (self.limits != null) {
             const events = try readGroupControl(self.path, "memory.events");
             sample.memory_max = try resource_observation.counter(events, "max");
+            self.recordExhaustion(sample, &observed_exhaustion);
             sample.memory_oom = try resource_observation.counter(events, "oom");
+            self.recordExhaustion(sample, &observed_exhaustion);
             sample.memory_oom_kill = try resource_observation.counter(events, "oom_kill");
+            self.recordExhaustion(sample, &observed_exhaustion);
             sample.cpu_usec = try resource_observation.counter(try readGroupControl(self.path, "cpu.stat"), "usage_usec");
+            self.recordExhaustion(sample, &observed_exhaustion);
             sample.memory_peak = try resource_observation.integer(try readGroupControl(self.path, "memory.peak"));
         }
         if (self.last_sample) |previous| try sample.checkAfter(previous);
@@ -1574,26 +1583,34 @@ const ResourceGroup = struct {
         return sample;
     }
 
-    fn pollExhaustion(self: *ResourceGroup) bool {
-        const sample = self.observe() catch {
-            // A later valid sample cannot repair a gap in enforcement.
-            self.observation_failed = true;
-            return true;
-        };
+    fn recordExhaustion(self: *ResourceGroup, sample: resource_observation.Sample, observed: *?protocol.ExecResourceExhaustion) void {
+        // Keep a valid exhaustion event even if another control read fails later.
         if (self.limits) |limits| {
-            if (sample.memory_oom_kill.? > 0 or sample.memory_oom.? > 0 or sample.memory_max.? > 0) {
-                if (self.exhausted == null) self.exhausted = .memory;
-            } else if (sample.cpu_usec.? / 1000 >= limits.cpu_time_ms) {
-                if (self.exhausted == null) self.exhausted = .cpu;
+            const memory_events = [_]?u64{ sample.memory_max, sample.memory_oom, sample.memory_oom_kill };
+            for (memory_events) |event| {
+                if (event) |count| {
+                    if (count > 0) observed.* = .memory;
+                }
+            }
+            if (sample.cpu_usec) |usec| {
+                if (usec / 1000 >= limits.cpu_time_ms and observed.* != .memory) observed.* = .cpu;
             }
         }
         if (sample.pids_max > 0) {
             if (self.deny_descendants) {
                 self.descendant_denied = true;
-            } else if (self.exhausted == null) {
-                self.exhausted = .pids;
+            } else if (observed.* == null) {
+                observed.* = .pids;
             }
         }
+    }
+
+    fn pollExhaustion(self: *ResourceGroup) bool {
+        _ = self.observe() catch {
+            // A later valid sample cannot repair a gap in enforcement.
+            self.observation_failed = true;
+            return true;
+        };
         return self.observation_failed or self.exhausted != null or self.descendant_denied;
     }
 
@@ -1699,12 +1716,20 @@ test "resource observation loss remains failed after files recover" {
         .deny_descendants = false,
     };
     try std.testing.expect(!group.pollExhaustion());
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pids.events", .data = "max 1\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "memory.events", .data = "max 1\noom 0\noom_kill 0\n" });
+    var mixed = group;
+    try std.testing.expect(mixed.pollExhaustion());
+    try std.testing.expectEqual(protocol.ExecResourceExhaustion.memory, mixed.exhausted.?);
+    mixed.exhausted = .pids;
+    try std.testing.expect(mixed.pollExhaustion());
+    try std.testing.expectEqual(protocol.ExecResourceExhaustion.pids, mixed.exhausted.?);
     try tmp.dir.deleteFile(std.testing.io, "cpu.stat");
     try std.testing.expect(group.pollExhaustion());
+    try std.testing.expectEqual(protocol.ExecResourceExhaustion.memory, group.exhausted.?);
     try std.testing.expect(group.observation_failed);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "cpu.stat", .data = "usage_usec 2000\n" });
     try std.testing.expect(group.pollExhaustion());
-    group.exhausted = .memory;
     const usage = group.settle();
     try std.testing.expect(usage.observation_failed);
     try std.testing.expectEqual(@as(?u64, null), usage.cpu_time_ms);
