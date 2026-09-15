@@ -269,7 +269,7 @@ export type ScopedRunnerInvocationEvidence = {
     /** Process policy version */
     process: "exact-mount-landlock/v1";
     /** Resource policy version */
-    resources: "qemu-cgroup-vfs/v2";
+    resources: "qemu-cgroup-vfs/v2" | "qemu-cgroup-vfs/v3";
     /** Lifecycle policy version */
     lifecycle: "one-shot-qemu/v1";
   };
@@ -377,6 +377,8 @@ export type ScopedRunnerResourceAccounting = AuthenticatedEvidenceEvent & {
   };
   /** Supplemental sandboxd report, not host teardown certification */
   guestResourceGroupRemoved: boolean;
+  /** Guest observation failure, required by resource policy v3 */
+  guestObservationFailed?: boolean;
 };
 
 export type CanonicalScopedRunnerRequest = {
@@ -670,6 +672,7 @@ export class ScopedRunnerInvocationContext {
         "exec.landlock-allowlist/v1",
         "exec.namespace-isolation/v1",
         "exec.resource-limits/v1",
+        "exec.resource-observation/v2",
       ]) {
         if (!runtime.guestFeatures.includes(feature)) {
           throw new CapabilityAdmissionError(
@@ -909,7 +912,8 @@ export class ScopedRunnerInvocationContext {
     } else if (hostCpuExhausted && outcome === "success") {
       outcome = "cpu_exhausted";
     }
-    if (guestUsage === undefined && commandDispatched) {
+    if (commandDispatched && (guestUsage === undefined || guestUsage.observationFailed !== false ||
+      [guestUsage.cpuTimeMs, guestUsage.memoryPeakBytes, guestUsage.pidsPeak].some((value) => value === null))) {
       const observationError = "guest resource accounting unavailable or malformed";
       processEvents.push(lifecycleEvent(identity, "policy", observationError));
       if (outcome === "success") {
@@ -964,13 +968,14 @@ export class ScopedRunnerInvocationContext {
           : cpuObservationFailed
             ? "host-qemu-process-incomplete"
             : "host-qemu-process",
-        memory: guestUsage ? "guest-reported-cgroup-v2" : "unavailable",
-        pids: guestUsage ? "guest-reported-cgroup-v2" : "unavailable",
+        memory: guestUsage?.memoryPeakBytes != null ? "guest-reported-cgroup-v2" : "unavailable",
+        pids: guestUsage?.pidsPeak != null ? "guest-reported-cgroup-v2" : "unavailable",
         storage: "host-vfs",
         output: "host-exec-channel",
         wallTime: "host-monotonic-clock",
       },
       guestResourceGroupRemoved: guestUsage?.resourceGroupRemoved ?? false,
+      guestObservationFailed: guestUsage?.observationFailed !== false,
     };
     processEvents.push(
       lifecycleEvent(
@@ -1011,7 +1016,7 @@ export class ScopedRunnerInvocationContext {
       admission: "scoped-runner/v1" as const,
       filesystem: "exact-ephemeral-vfs/v1" as const,
       process: "exact-mount-landlock/v1" as const,
-      resources: "qemu-cgroup-vfs/v2" as const,
+      resources: "qemu-cgroup-vfs/v3" as const,
       lifecycle: "one-shot-qemu/v1" as const,
     };
     const qualificationId = capabilityQualificationId({
@@ -1071,8 +1076,9 @@ function validGuestResourceUsage(value: unknown): value is import("./exec.ts").E
   if (value === null || typeof value !== "object") return false;
   const usage = value as Record<string, unknown>;
   return [usage.cpuTimeMs, usage.memoryPeakBytes, usage.pidsPeak].every(
-    (measurement) => typeof measurement === "number" && Number.isSafeInteger(measurement) && measurement >= 0,
+    (measurement) => measurement === null || (typeof measurement === "number" && Number.isSafeInteger(measurement) && measurement >= 0),
   ) && (usage.exhausted === null || usage.exhausted === "cpu" || usage.exhausted === "memory" || usage.exhausted === "pids")
+    && typeof usage.observationFailed === "boolean"
     && typeof usage.resourceGroupRemoved === "boolean"
     && (usage.descendantDenied === undefined || typeof usage.descendantDenied === "boolean");
 }

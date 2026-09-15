@@ -66,3 +66,26 @@ checks these measurement/source pairs and rejects success with unavailable
 accounting. This changes the scoped-runner policy and qualification identity;
 existing release pins do not inherit it. Guest reports remain guest observations,
 not independent host qualification.
+
+## Guest observation loss prerequisite
+
+The next source revision adds guest feature `exec.resource-observation/v2` and
+scoped resource evidence policy `qemu-cgroup-vfs/v3`. The daemon now treats
+unreadable, truncated, missing, malformed, duplicate, overflowing or regressing
+cgroup counters as observation failure. Polling requests payload termination on
+that failure. Failure remains sticky through settlement: later readable counters
+cannot repair the missing interval, and unavailable usage is encoded as null.
+Previously observed exhaustion remains distinct from accounting loss.
+
+The host requires the new binary-bound image feature before starting a scoped
+invocation, checks explicit observation status, preserves known failure outcomes,
+and refuses successful evidence when guest observation failed. Historical v2
+receipts retain their original interpretation. This change requires a new reviewed
+release before consumers can use it; `.7` assets and consumer pins are unchanged.
+
+Guest tests cover strict parsing, counter regression, real control-file read loss
+and recovery, and truncated input. Host tests cover null usage, observation loss
+racing a successful exit, retained exhaustion, signed contradictory evidence and
+old-image admission refusal. These tests do not independently qualify a runtime.
+QEMU CPU accounting remains QEMU accounting, and the proposed
+[scoped tree/payload profile](scoped-tree-payload-profile.md) is not enabled.

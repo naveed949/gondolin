@@ -557,6 +557,7 @@ export function writeAssetManifest(
     for (const feature of [
       "exec.exact-path-lsm/v1",
       "exec.payload-confinement/v1",
+      "exec.resource-observation/v2",
     ]) {
       if (binary.includes(Buffer.from(`gondolin-feature:${feature}`)))
         guestFeatures.push(feature);
