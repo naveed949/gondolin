@@ -5,6 +5,7 @@ const posix = sandboxd.posix;
 const file_requests = @import("file_requests.zig");
 const exec_guard = @import("exec_guard.zig");
 const payload_privileges = @import("payload_privileges.zig");
+const resource_observation = @import("resource_observation.zig");
 const c = @cImport({
     @cDefine("_GNU_SOURCE", "1");
     @cInclude("fcntl.h");
@@ -36,7 +37,11 @@ pub export var exact_path_feature_marker: [exact_path_marker.len]u8 = exact_path
 const payload_marker = "gondolin-feature:exec.payload-confinement/v1";
 pub export var payload_feature_marker: [payload_marker.len]u8 = payload_marker.*;
 
+const resource_marker = "gondolin-feature:exec.resource-observation/v2";
+pub export var resource_feature_marker: [resource_marker.len]u8 = resource_marker.*;
+
 test {
+    _ = resource_observation;
     _ = file_requests;
     _ = exec_guard;
     _ = payload_privileges;
@@ -1491,6 +1496,8 @@ const ResourceGroup = struct {
     deny_descendants: bool,
     exhausted: ?protocol.ExecResourceExhaustion = null,
     descendant_denied: bool = false,
+    observation_failed: bool = false,
+    last_sample: ?resource_observation.Sample = null,
 
     fn create(
         allocator: std.mem.Allocator,
@@ -1544,31 +1551,50 @@ const ResourceGroup = struct {
         try writeGroupControl(self.path, "cgroup.procs", value);
     }
 
+    fn observe(self: *ResourceGroup) !resource_observation.Sample {
+        var sample: resource_observation.Sample = .{
+            .cpu_usec = null,
+            .memory_peak = null,
+            .pids_peak = try resource_observation.integer(try readGroupControl(self.path, "pids.peak")),
+            .memory_max = null,
+            .memory_oom = null,
+            .memory_oom_kill = null,
+            .pids_max = try resource_observation.counter(try readGroupControl(self.path, "pids.events"), "max"),
+        };
+        if (self.limits != null) {
+            const events = try readGroupControl(self.path, "memory.events");
+            sample.memory_max = try resource_observation.counter(events, "max");
+            sample.memory_oom = try resource_observation.counter(events, "oom");
+            sample.memory_oom_kill = try resource_observation.counter(events, "oom_kill");
+            sample.cpu_usec = try resource_observation.counter(try readGroupControl(self.path, "cpu.stat"), "usage_usec");
+            sample.memory_peak = try resource_observation.integer(try readGroupControl(self.path, "memory.peak"));
+        }
+        if (self.last_sample) |previous| try sample.checkAfter(previous);
+        self.last_sample = sample;
+        return sample;
+    }
+
     fn pollExhaustion(self: *ResourceGroup) bool {
-        if (self.exhausted != null) return true;
+        const sample = self.observe() catch {
+            // A later valid sample cannot repair a gap in enforcement.
+            self.observation_failed = true;
+            return true;
+        };
         if (self.limits) |limits| {
-            const memory_events = readGroupControl(self.path, "memory.events") catch return false;
-            if (controlCounter(memory_events, "oom_kill") > 0 or controlCounter(memory_events, "oom") > 0 or controlCounter(memory_events, "max") > 0) {
-                self.exhausted = .memory;
-                return true;
-            }
-            const cpu_stat = readGroupControl(self.path, "cpu.stat") catch return false;
-            const cpu_ms = controlCounter(cpu_stat, "usage_usec") / 1000;
-            if (cpu_ms >= limits.cpu_time_ms) {
-                self.exhausted = .cpu;
-                return true;
+            if (sample.memory_oom_kill.? > 0 or sample.memory_oom.? > 0 or sample.memory_max.? > 0) {
+                if (self.exhausted == null) self.exhausted = .memory;
+            } else if (sample.cpu_usec.? / 1000 >= limits.cpu_time_ms) {
+                if (self.exhausted == null) self.exhausted = .cpu;
             }
         }
-        const pids_events = readGroupControl(self.path, "pids.events") catch return false;
-        if (controlCounter(pids_events, "max") > 0) {
+        if (sample.pids_max > 0) {
             if (self.deny_descendants) {
                 self.descendant_denied = true;
-            } else {
+            } else if (self.exhausted == null) {
                 self.exhausted = .pids;
             }
-            return true;
         }
-        return false;
+        return self.observation_failed or self.exhausted != null or self.descendant_denied;
     }
 
     fn killAll(self: *ResourceGroup) void {
@@ -1585,18 +1611,9 @@ const ResourceGroup = struct {
             posix.nanosleep(0, 1 * std.time.ns_per_ms);
         }
 
-        const cpu_ms = blk: {
-            const value = readGroupControl(self.path, "cpu.stat") catch break :blk 0;
-            break :blk controlCounter(value, "usage_usec") / 1000;
-        };
-        const memory_peak = blk: {
-            const value = readGroupControl(self.path, "memory.peak") catch break :blk 0;
-            break :blk parseControlInteger(value);
-        };
-        const pids_peak = blk: {
-            const value = readGroupControl(self.path, "pids.peak") catch break :blk 0;
-            break :blk parseControlInteger(value);
-        };
+        // Collect after draining: final usage may exceed the last running sample.
+        _ = self.pollExhaustion();
+        const sample = if (self.observation_failed) null else self.last_sample;
         const group_path_z = std.heap.page_allocator.dupeZ(u8, self.path) catch null;
         var removed = false;
         if (group_path_z) |path_z| {
@@ -1604,9 +1621,10 @@ const ResourceGroup = struct {
             removed = c.rmdir(path_z.ptr) == 0;
         }
         return .{
-            .cpu_time_ms = cpu_ms,
-            .memory_peak_bytes = memory_peak,
-            .pids_peak = pids_peak,
+            .cpu_time_ms = if (sample) |value| if (value.cpu_usec) |usec| usec / 1000 else null else null,
+            .memory_peak_bytes = if (sample) |value| value.memory_peak else null,
+            .pids_peak = if (sample) |value| value.pids_peak else null,
+            .observation_failed = self.observation_failed,
             .exhausted = self.exhausted,
             .descendant_denied = self.descendant_denied,
             .resource_group_removed = removed,
@@ -1656,22 +1674,54 @@ fn readGroupControl(group: []const u8, name: []const u8) ![]const u8 {
     if (fd < 0) return error.ResourceControllerUnavailable;
     defer _ = c.close(fd);
     const length = posix.read(fd, &control_read_buffer) catch return error.ResourceControllerUnavailable;
+    if (length == control_read_buffer.len) return error.ResourceControllerUnavailable;
     return control_read_buffer[0..length];
 }
 
-fn controlCounter(contents: []const u8, key: []const u8) u64 {
-    var lines = std.mem.splitScalar(u8, contents, '\n');
-    while (lines.next()) |line| {
-        var fields = std.mem.tokenizeScalar(u8, line, ' ');
-        const found_key = fields.next() orelse continue;
-        if (!std.mem.eql(u8, found_key, key)) continue;
-        return std.fmt.parseInt(u64, fields.next() orelse return 0, 10) catch 0;
-    }
-    return 0;
+test "resource observation loss remains failed after files recover" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root_dir = root_buf[0..try tmp.dir.realPath(std.testing.io, &root_buf)];
+    const files = .{
+        .{ "cpu.stat", "usage_usec 1000\n" },
+        .{ "memory.events", "max 0\noom 0\noom_kill 0\n" },
+        .{ "memory.peak", "4096\n" },
+        .{ "pids.events", "max 0\n" },
+        .{ "pids.peak", "1\n" },
+        .{ "cgroup.procs", "" },
+        .{ "cgroup.kill", "" },
+    };
+    inline for (files) |entry| try tmp.dir.writeFile(std.testing.io, .{ .sub_path = entry[0], .data = entry[1] });
+    var group: ResourceGroup = .{
+        .path = root_dir,
+        .limits = .{ .cpu_time_ms = 100, .memory_bytes = 8192, .pids = 2 },
+        .deny_descendants = false,
+    };
+    try std.testing.expect(!group.pollExhaustion());
+    try tmp.dir.deleteFile(std.testing.io, "cpu.stat");
+    try std.testing.expect(group.pollExhaustion());
+    try std.testing.expect(group.observation_failed);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "cpu.stat", .data = "usage_usec 2000\n" });
+    try std.testing.expect(group.pollExhaustion());
+    group.exhausted = .memory;
+    const usage = group.settle();
+    try std.testing.expect(usage.observation_failed);
+    try std.testing.expectEqual(@as(?u64, null), usage.cpu_time_ms);
+    try std.testing.expectEqual(@as(?u64, null), usage.memory_peak_bytes);
+    try std.testing.expectEqual(@as(?u64, null), usage.pids_peak);
+    try std.testing.expectEqual(protocol.ExecResourceExhaustion.memory, usage.exhausted.?);
+    try std.testing.expect(!usage.resource_group_removed);
 }
 
-fn parseControlInteger(contents: []const u8) u64 {
-    return std.fmt.parseInt(u64, std.mem.trim(u8, contents, " \r\n\t"), 10) catch 0;
+test "truncated control-file reads cannot supply accounting" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root_dir = root_buf[0..try tmp.dir.realPath(std.testing.io, &root_buf)];
+    const contents = "0" ** 4096;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "memory.peak", .data = contents });
+    try std.testing.expectError(error.ResourceControllerUnavailable, readGroupControl(root_dir, "memory.peak"));
 }
 
 /// Install optional per-exec IPC and device mount namespaces before Landlock.

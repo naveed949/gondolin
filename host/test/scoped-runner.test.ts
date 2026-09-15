@@ -558,7 +558,7 @@ test("CPU observation fails permanently on missing samples, reused PIDs, or coun
 });
 
 test("scoped invocation settles CPU observation failures and captures its final sample before teardown", async (t) => {
-  for (const scenario of ["lost-observer", "final-budget", "startup-failure", "guest-crash", "missing-usage", "malformed-usage", "valid-zero-usage", "failed-command-missing-usage"] as const) {
+  for (const scenario of ["lost-observer", "final-budget", "startup-failure", "guest-crash", "missing-usage", "malformed-usage", "valid-zero-usage", "failed-command-missing-usage", "guest-observer-loss", "null-usage", "memory-exhaustion-with-observer-loss", "missing-observation-feature"] as const) {
     await t.test(scenario, async (t) => {
       let closed = false;
       let samples = 0;
@@ -578,11 +578,12 @@ test("scoped invocation settles CPU observation failures and captures its final 
           guestControlDigest: "unit", guestFeatures: [
             "exec.clear-env/v1", "exec.executable-mount-policy/v1", "exec.exact-path-lsm/v1",
             "exec.payload-confinement/v1", "exec.landlock-allowlist/v1",
-            "exec.namespace-isolation/v1", "exec.resource-limits/v1",
-          ],
+            "exec.namespace-isolation/v1", "exec.resource-limits/v1", "exec.resource-observation/v2",
+          ].filter((feature) => scenario !== "missing-observation-feature" || feature !== "exec.resource-observation/v2"),
         }),
         getHostPid: () => 2147483647,
         start: async () => {
+          assert.notEqual(scenario, "missing-observation-feature", "unsupported observation protocol must deny before VM start");
           if (scenario === "startup-failure") throw new Error("unit startup failure");
         },
         exec: async (_args: unknown, options: { signal: AbortSignal }) => {
@@ -599,14 +600,25 @@ test("scoped invocation settles CPU observation failures and captures its final 
           }
           // Even a racing successful exit cannot conceal lost enforcement.
           return { exitCode: scenario === "failed-command-missing-usage" ? 1 : 0,
-            ...(scenario === "valid-zero-usage" || scenario === "malformed-usage" ? {
-              resourceUsage: { cpuTimeMs: 0, memoryPeakBytes: scenario === "malformed-usage" ? -1 : 0,
-                pidsPeak: 0, exhausted: null, resourceGroupRemoved: true },
+            ...(["valid-zero-usage", "malformed-usage", "guest-observer-loss", "null-usage", "memory-exhaustion-with-observer-loss"].includes(scenario) ? {
+              resourceUsage: {
+                cpuTimeMs: scenario === "null-usage" ? null : 0,
+                memoryPeakBytes: scenario === "malformed-usage" ? -1 : scenario === "null-usage" ? null : 0,
+                pidsPeak: scenario === "null-usage" ? null : 0,
+                exhausted: scenario === "memory-exhaustion-with-observer-loss" ? "memory" : null,
+                resourceGroupRemoved: true,
+                observationFailed: ["guest-observer-loss", "memory-exhaustion-with-observer-loss"].includes(scenario),
+              },
             } : {}),
           };
         },
         close: async () => { closed = true; },
       }) as unknown as VM);
+      if (scenario === "missing-observation-feature") {
+        await assert.rejects(ScopedRunnerInvocationContext.create(ceiling()).invoke(request()), /exec.resource-observation\/v2/);
+        assert.equal(closed, true);
+        return;
+      }
       const result = await ScopedRunnerInvocationContext.create(ceiling()).invoke(request());
       assert.equal(closed, true);
       if (scenario === "lost-observer") {
@@ -628,7 +640,11 @@ test("scoped invocation settles CPU observation failures and captures its final 
         assert.equal(result.outcome, "success");
       } else if (scenario === "failed-command-missing-usage") {
         assert.equal(result.outcome, "command_failed");
-      } else if (scenario === "missing-usage" || scenario === "malformed-usage") {
+      } else if (scenario === "memory-exhaustion-with-observer-loss") {
+        assert.equal(result.outcome, "memory_exhausted");
+        assert.equal(result.resourceAccounting.guestObservationFailed, true);
+        assert.equal(result.resourceAccounting.exhaustionObservation, "guest-reported");
+      } else if (["missing-usage", "malformed-usage", "guest-observer-loss", "null-usage"].includes(scenario)) {
         assert.equal(result.outcome, "host_controller_failure");
         assert.match(result.error!, /guest resource accounting unavailable or malformed/);
       } else {
@@ -636,14 +652,22 @@ test("scoped invocation settles CPU observation failures and captures its final 
         assert.equal(result.resourceAccounting.usage.cpuTimeMs, null);
         assert.equal(result.resourceAccounting.observations.cpu, "unavailable");
       }
-      assert.equal(result.resourceAccounting.usage.memoryPeakBytes, scenario === "valid-zero-usage" ? 0 : null);
-      assert.equal(result.resourceAccounting.usage.pidsPeak, scenario === "valid-zero-usage" ? 0 : null);
-      assert.equal(result.resourceAccounting.observations.memory, scenario === "valid-zero-usage" ? "guest-reported-cgroup-v2" : "unavailable");
-      assert.equal(result.resourceAccounting.observations.pids, scenario === "valid-zero-usage" ? "guest-reported-cgroup-v2" : "unavailable");
-      assert.equal(result.evidence.policyVersions.resources, "qemu-cgroup-vfs/v2");
+      assert.equal(result.resourceAccounting.usage.memoryPeakBytes, ["valid-zero-usage", "guest-observer-loss", "memory-exhaustion-with-observer-loss"].includes(scenario) ? 0 : null);
+      assert.equal(result.resourceAccounting.usage.pidsPeak, ["valid-zero-usage", "guest-observer-loss", "memory-exhaustion-with-observer-loss"].includes(scenario) ? 0 : null);
+      assert.equal(result.resourceAccounting.observations.memory, ["valid-zero-usage", "guest-observer-loss", "memory-exhaustion-with-observer-loss"].includes(scenario) ? "guest-reported-cgroup-v2" : "unavailable");
+      assert.equal(result.resourceAccounting.observations.pids, ["valid-zero-usage", "guest-observer-loss", "memory-exhaustion-with-observer-loss"].includes(scenario) ? "guest-reported-cgroup-v2" : "unavailable");
+      assert.equal(result.evidence.policyVersions.resources, "qemu-cgroup-vfs/v3");
       assert.deepEqual(result.evidence.resources, result.resourceAccounting);
       const verification = verifyCapabilityInvocationEvidence(result.evidence);
       assert.equal(verification.valid, true, verification.errors.join("; "));
+      if (scenario === "guest-observer-loss") {
+        const forged = structuredClone(result.evidence);
+        forged.outcome = "success";
+        const { integrity: _integrity, ...payload } = forged;
+        const checked = verifyCapabilityInvocationEvidence(sealCapabilityEvidence(payload));
+        assert.equal(checked.valid, false);
+        assert.ok(checked.errors.includes("successful execution has failed guest observation"));
+      }
       if (scenario === "missing-usage") {
         for (const dishonest of ["fabricated-source", "success-without-measurement"]) {
           const forged = structuredClone(result.evidence);

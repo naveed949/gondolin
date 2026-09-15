@@ -49,18 +49,20 @@ pub const ExecResourceExhaustion = enum {
 };
 
 pub const ExecResourceUsage = struct {
-    /// complete process-tree CPU time in `ms`
-    cpu_time_ms: u64,
-    /// peak complete process-tree memory in `bytes`
-    memory_peak_bytes: u64,
-    /// peak simultaneous process-tree members
-    pids_peak: u64,
+    /// complete process-tree CPU time in `ms`, or unavailable
+    cpu_time_ms: ?u64,
+    /// peak complete process-tree memory in `bytes`, or unavailable
+    memory_peak_bytes: ?u64,
+    /// peak simultaneous process-tree members, or unavailable
+    pids_peak: ?u64,
     /// controller which caused termination
     exhausted: ?ExecResourceExhaustion,
     /// descendant creation blocked by the process policy
     descendant_denied: bool,
     /// resource-group empty-and-removed state
     resource_group_removed: bool,
+    /// Sticky accounting observation failure during execution or settlement
+    observation_failed: bool = false,
 };
 
 pub const ExecRequest = struct {
@@ -479,13 +481,13 @@ pub fn encodeExecResponse(
     }
     if (resource_usage) |usage| {
         try cbor.writeText(w, "resource_usage");
-        try cbor.writeMapStart(w, 6);
+        try cbor.writeMapStart(w, 7);
         try cbor.writeText(w, "cpuTimeMs");
-        try cbor.writeUInt(w, usage.cpu_time_ms);
+        if (usage.cpu_time_ms) |value| try cbor.writeUInt(w, value) else try cbor.writeNull(w);
         try cbor.writeText(w, "memoryPeakBytes");
-        try cbor.writeUInt(w, usage.memory_peak_bytes);
+        if (usage.memory_peak_bytes) |value| try cbor.writeUInt(w, value) else try cbor.writeNull(w);
         try cbor.writeText(w, "pidsPeak");
-        try cbor.writeUInt(w, usage.pids_peak);
+        if (usage.pids_peak) |value| try cbor.writeUInt(w, value) else try cbor.writeNull(w);
         try cbor.writeText(w, "exhausted");
         if (usage.exhausted) |exhausted| {
             try cbor.writeText(w, @tagName(exhausted));
@@ -496,6 +498,8 @@ pub fn encodeExecResponse(
         try cbor.writeBool(w, usage.descendant_denied);
         try cbor.writeText(w, "resourceGroupRemoved");
         try cbor.writeBool(w, usage.resource_group_removed);
+        try cbor.writeText(w, "observationFailed");
+        try cbor.writeBool(w, usage.observation_failed);
     }
 
     return try buf.toOwnedSlice(allocator);

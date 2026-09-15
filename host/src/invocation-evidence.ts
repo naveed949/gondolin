@@ -813,7 +813,11 @@ function verifyEffects(
       );
     }
     sequences.add(sequence);
-    if (isRecord(evidence.policyVersions) && evidence.policyVersions.resources === "qemu-cgroup-vfs/v2") {
+    if (isRecord(evidence.policyVersions) && ["qemu-cgroup-vfs/v2", "qemu-cgroup-vfs/v3"].includes(String(evidence.policyVersions.resources))) {
+      if (evidence.policyVersions.resources === "qemu-cgroup-vfs/v3") {
+        if (typeof resources.guestObservationFailed !== "boolean") errors.push("guest observation status is missing");
+        if (evidence.outcome === "success" && resources.guestObservationFailed !== false) errors.push("successful execution has failed guest observation");
+      }
       const usage = resources.usage;
       const observations = resources.observations;
       for (const [metric, domain] of [["memoryPeakBytes", "memory"], ["pidsPeak", "pids"]] as const) {

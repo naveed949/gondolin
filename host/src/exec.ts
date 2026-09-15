@@ -27,18 +27,20 @@ export type ExecResourceLimits = {
 
 /** Guest-controller accounting returned after the resource group is empty */
 export type ExecResourceUsage = {
-  /** Complete process-tree CPU time in `ms` */
-  cpuTimeMs: number;
-  /** Peak complete process-tree memory in `bytes` */
-  memoryPeakBytes: number;
-  /** Peak simultaneous entrypoint and descendant process count */
-  pidsPeak: number;
+  /** Complete process-tree CPU time in `ms`, or `null` when unavailable */
+  cpuTimeMs: number | null;
+  /** Peak complete process-tree memory in `bytes`, or `null` when unavailable */
+  memoryPeakBytes: number | null;
+  /** Peak simultaneous entrypoint and descendant process count, or `null` when unavailable */
+  pidsPeak: number | null;
   /** Controller which caused termination */
   exhausted: "cpu" | "memory" | "pids" | null;
   /** Descendant creation blocked by the process policy */
   descendantDenied?: boolean;
   /** Guest resource-group empty-and-removed state */
   resourceGroupRemoved: boolean;
+  /** Sticky observation loss; required by exec.resource-observation/v2 */
+  observationFailed?: boolean;
 };
 
 /**
