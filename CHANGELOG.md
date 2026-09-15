@@ -4,6 +4,17 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.8
+
+- Fail scoped-runner settlement closed when guest cgroup accounting is missing,
+  malformed, truncated, or regresses. Retain observation failures and known
+  exhaustion causes through cleanup; report unavailable measurements as null.
+  Require image feature `exec.resource-observation/v2` and bind the evidence to
+  resource policy `qemu-cgroup-vfs/v3`.
+- Record the reviewed scoped tree and payload accounting contract. Tree authority
+  and payload-only CPU enforcement remain unimplemented; this experimental
+  release does not qualify either platform or enable qualified admission.
+
 ## 0.12.1-adaptivesandbox.7
 
 - Report unavailable scoped-runner guest memory/PID measurements as null instead

@@ -1,6 +1,6 @@
 # Experimental fork releases
 
-The next prepared fork release is `v0.12.1-adaptivesandbox.7`. It is a GitHub-only,
+The next prepared fork release is `v0.12.1-adaptivesandbox.8`. It is a GitHub-only,
 QEMU-only prerelease for adapter development. It is not an AdaptiveSandbox-qualified
 release, and it does not unblock qualified production admission by itself.
 The credential-free HTTPS invocation implementation carried forward from `.5` adds
@@ -17,7 +17,13 @@ for command dispatch and the staged write, retaining every failure-atomicity ass
 requires three consecutive non-skipping runs of both timeout cases. Runtime
 enforcement is unchanged.
 
-Create the `.7` tag only after these changes are reviewed, merged, and the exact
+The `.7` accounting contract carried unavailable memory/PID values as null. `.8`
+requires `exec.resource-observation/v2` guest images, retains missing, malformed,
+truncated, or regressing observations as failures, and binds evidence to
+`qemu-cgroup-vfs/v3`. Its scoped tree and payload profile is a reviewed design;
+tree authority and payload-only CPU enforcement remain unimplemented.
+
+Create the `.8` tag only after these changes are reviewed, merged, and the exact
 main commit passes CI. Never retag a published release.
 
 ## Prepare and publish
@@ -29,8 +35,8 @@ main commit passes CI. Never retag a published release.
    ```bash
    git switch main
    git pull --ff-only origin main
-   git tag -a v0.12.1-adaptivesandbox.7 -m "Experimental AdaptiveSandbox integration release"
-   git push origin v0.12.1-adaptivesandbox.7
+   git tag -a v0.12.1-adaptivesandbox.8 -m "Experimental AdaptiveSandbox integration release"
+   git push origin v0.12.1-adaptivesandbox.8
    ```
 
 3. Watch **Experimental GitHub Release** in Actions. It validates the tag, reuses
@@ -61,10 +67,10 @@ artifact removes optional krun packages and workspace lifecycle scripts. It can
 still be installed from a downloaded tarball:
 
 ```bash
-gh release download v0.12.1-adaptivesandbox.7 --repo naveed949/gondolin --dir gondolin-release
+gh release download v0.12.1-adaptivesandbox.8 --repo naveed949/gondolin --dir gondolin-release
 cd gondolin-release
 sha256sum --check SHA256SUMS
-npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.7.tgz
+npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.8.tgz
 ```
 
 On macOS, use `shasum -a 256 -c SHA256SUMS`. Install QEMU separately. The package's
@@ -76,7 +82,7 @@ image archive for a fully explicit local setup.
 
 The image registry includes an `alpine-base:latest` alias *within the fixed
 release registry*. For explicit development identity use
-`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.7`, or a digest-verified
+`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.8`, or a digest-verified
 extracted image directory. Existing local image caches and explicit overrides
 are operator state, not qualification evidence.
 
