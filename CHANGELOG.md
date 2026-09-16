@@ -4,6 +4,12 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Implement the versioned `scoped-tree-runner/v1` runtime: live root-bound
+  openat2 VFS, private cache/temp roots with retained identities, no-fork
+  payload confinement, and payload-subtree cgroup/wait4 resource accounting.
+  The public feature manifest does not advertise the profile yet; AdaptiveSandbox
+  admission, consumer pins, and qualified matrix rows remain out of scope.
+
 ## 0.12.1-adaptivesandbox.8
 
 - Fail scoped-runner settlement closed when guest cgroup accounting is missing,

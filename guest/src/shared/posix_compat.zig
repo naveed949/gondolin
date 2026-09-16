@@ -132,11 +132,32 @@ pub const WaitPidResult = struct {
 };
 
 pub fn waitpid(pid: pid_t, flags: u32) WaitPidResult {
+    const result = wait4(pid, flags);
+    return .{ .pid = result.pid, .status = result.status };
+}
+
+pub const Wait4Result = struct {
+    pid: pid_t,
+    status: u32,
+    /// User plus system CPU in `ms`
+    cpu_ms: u64,
+};
+
+pub fn wait4(pid: pid_t, flags: u32) Wait4Result {
     var status: c_int = undefined;
+    var usage: std.c.rusage = std.mem.zeroes(std.c.rusage);
     while (true) {
-        const rc = std.c.waitpid(pid, &status, @intCast(flags));
+        const rc = std.c.wait4(pid, &status, @intCast(flags), &usage);
         switch (errno(rc)) {
-            .SUCCESS => return .{ .pid = rc, .status = @bitCast(status) },
+            .SUCCESS => {
+                const user_ms: u64 = @intCast(@max(0, usage.utime.sec) * 1000 + @divTrunc(@max(0, usage.utime.usec), 1000));
+                const system_ms: u64 = @intCast(@max(0, usage.stime.sec) * 1000 + @divTrunc(@max(0, usage.stime.usec), 1000));
+                return .{
+                    .pid = rc,
+                    .status = @bitCast(status),
+                    .cpu_ms = user_ms + system_ms,
+                };
+            },
             .INTR => continue,
             .CHILD => unreachable,
             .INVAL => unreachable,

@@ -130,6 +130,9 @@ jobs:
       - name: Verify descendant-denial feature marker
         run: grep -aFq 'gondolin-feature:exec.descendants-denied/v1' guest/zig-out/bin/sandboxd
 
+      - name: Verify scoped-tree-runner feature marker
+        run: grep -aFq 'gondolin-feature:exec.scoped-tree-runner/v1' guest/zig-out/bin/sandboxd
+
       - name: Package helper archive
         run: |
           node scripts/package-sandbox-helpers.mjs \

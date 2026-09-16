@@ -39,6 +39,8 @@ pub export var payload_feature_marker: [payload_marker.len]u8 = payload_marker.*
 
 const resource_marker = "gondolin-feature:exec.resource-observation/v2";
 pub export var resource_feature_marker: [resource_marker.len]u8 = resource_marker.*;
+const scoped_tree_marker = "gondolin-feature:exec.scoped-tree-runner/v1";
+pub export var scoped_tree_feature_marker: [scoped_tree_marker.len]u8 = scoped_tree_marker.*;
 
 test {
     _ = resource_observation;
@@ -88,6 +90,10 @@ const OwnedExecRequest = struct {
     resource_limits: ?protocol.ExecResourceLimits,
     isolate_ipc: bool,
     isolate_devices: bool,
+    isolate_proc: bool,
+    deny_fork: bool,
+    allowed_readable_directories: []const []const u8,
+    allowed_writable_directories: []const []const u8,
     cwd: ?[]u8,
     stdin: bool,
     pty: bool,
@@ -104,6 +110,10 @@ const OwnedExecRequest = struct {
         allocator.free(self.allowed_executables);
         for (self.allowed_writable_paths) |entry| allocator.free(entry);
         allocator.free(self.allowed_writable_paths);
+        for (self.allowed_readable_directories) |entry| allocator.free(entry);
+        allocator.free(self.allowed_readable_directories);
+        for (self.allowed_writable_directories) |entry| allocator.free(entry);
+        allocator.free(self.allowed_writable_directories);
         if (self.cwd) |cwd| allocator.free(cwd);
     }
 };
@@ -238,6 +248,28 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         writable_len += 1;
     }
 
+    var allowed_readable_directories = try allocator.alloc([]const u8, req.allowed_readable_directories.len);
+    var readable_dir_len: usize = 0;
+    errdefer {
+        for (allowed_readable_directories[0..readable_dir_len]) |entry| allocator.free(entry);
+        allocator.free(allowed_readable_directories);
+    }
+    for (req.allowed_readable_directories) |entry| {
+        allowed_readable_directories[readable_dir_len] = try allocator.dupe(u8, entry);
+        readable_dir_len += 1;
+    }
+
+    var allowed_writable_directories = try allocator.alloc([]const u8, req.allowed_writable_directories.len);
+    var writable_dir_len: usize = 0;
+    errdefer {
+        for (allowed_writable_directories[0..writable_dir_len]) |entry| allocator.free(entry);
+        allocator.free(allowed_writable_directories);
+    }
+    for (req.allowed_writable_directories) |entry| {
+        allowed_writable_directories[writable_dir_len] = try allocator.dupe(u8, entry);
+        writable_dir_len += 1;
+    }
+
     const cwd = if (req.cwd) |value| try allocator.dupe(u8, value) else null;
     errdefer if (cwd) |value| allocator.free(value);
 
@@ -256,6 +288,10 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         .resource_limits = req.resource_limits,
         .isolate_ipc = req.isolate_ipc,
         .isolate_devices = req.isolate_devices,
+        .isolate_proc = req.isolate_proc,
+        .deny_fork = req.deny_fork,
+        .allowed_readable_directories = allowed_readable_directories,
+        .allowed_writable_directories = allowed_writable_directories,
         .cwd = cwd,
         .stdin = req.stdin,
         .pty = req.pty,
@@ -356,6 +392,8 @@ pub fn main() !void {
                 allocator.free(req.env);
                 allocator.free(req.allowed_executables);
                 allocator.free(req.allowed_writable_paths);
+                allocator.free(req.allowed_readable_directories);
+                allocator.free(req.allowed_writable_directories);
             }
 
             startExecSession(&exec_sessions, &tx, req) catch |err| {
@@ -769,12 +807,13 @@ fn runExecSession(session: *ExecSession) !void {
             req.id,
             req.resource_limits,
             req.deny_descendants,
+            req.allowed_writable_directories.len > 0,
         )
     else
         null;
     var resource_usage: ?protocol.ExecResourceUsage = null;
     defer if (resource_group) |*group| {
-        if (resource_usage == null) resource_usage = group.settle();
+        if (resource_usage == null) resource_usage = group.settle(null, false);
     };
 
     var guard: ?exec_guard.Guard = if (req.allowed_executables.len > 0)
@@ -786,7 +825,7 @@ fn runExecSession(session: *ExecSession) !void {
         null;
     defer if (guard) |*installed| {
         if (resource_usage == null) {
-            if (resource_group) |*group| resource_usage = group.settle();
+            if (resource_group) |*group| resource_usage = group.settle(null, false);
         }
         // A pinned guard survives daemon failure and is removed only after the
         // cgroup has been removed, proving that no payload remains in it.
@@ -804,7 +843,10 @@ fn runExecSession(session: *ExecSession) !void {
     const needs_setup_status = req.isolate_ipc or
         req.isolate_devices or
         req.allowed_executables.len > 0 or
-        req.allowed_writable_paths.len > 0;
+        req.allowed_writable_paths.len > 0 or
+        req.allowed_readable_directories.len > 0 or
+        req.allowed_writable_directories.len > 0 or
+        req.deny_fork;
     var setup_gate: ?[2]posix.fd_t = if (needs_setup_status)
         try posix.pipe2(.{ .CLOEXEC = true })
     else
@@ -834,21 +876,27 @@ fn runExecSession(session: *ExecSession) !void {
         pid = @intCast(forked);
         if (pid == 0) {
             awaitResourceStartGate(start_gate) catch posix.exit(126);
-            applyNamespaceIsolation(req.isolate_ipc, req.isolate_devices) catch {
+            applyNamespaceIsolation(req.isolate_ipc, req.isolate_devices, req.isolate_proc) catch {
                 reportExecSetup(setup_gate, .namespace_failed);
                 posix.exit(126);
             };
-            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
+            applyCapabilityPolicy(
+                req.allowed_executables,
+                req.allowed_writable_paths,
+                req.allowed_readable_directories,
+                req.allowed_writable_directories,
+            ) catch {
                 reportExecSetup(setup_gate, .policy_failed);
                 posix.exit(126);
             };
-            if (req.allowed_executables.len > 0) {
-                confinePayload() catch {
+            if (req.allowed_executables.len > 0 or req.deny_fork) {
+                confinePayload(req.deny_fork) catch {
                     reportExecSetup(setup_gate, .policy_failed);
                     posix.exit(126);
                 };
             }
             reportExecSetup(setup_gate, .ready);
+            if (req.deny_fork) closeInheritedDescriptors() catch posix.exit(126);
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
             }
@@ -924,22 +972,28 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.close(stdin_pipe.?[1]);
             }
 
-            applyNamespaceIsolation(req.isolate_ipc, req.isolate_devices) catch {
+            applyNamespaceIsolation(req.isolate_ipc, req.isolate_devices, req.isolate_proc) catch {
                 reportExecSetup(setup_gate, .namespace_failed);
                 posix.exit(126);
             };
 
-            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
+            applyCapabilityPolicy(
+                req.allowed_executables,
+                req.allowed_writable_paths,
+                req.allowed_readable_directories,
+                req.allowed_writable_directories,
+            ) catch {
                 reportExecSetup(setup_gate, .policy_failed);
                 posix.exit(126);
             };
-            if (req.allowed_executables.len > 0) {
-                confinePayload() catch {
+            if (req.allowed_executables.len > 0 or req.deny_fork) {
+                confinePayload(req.deny_fork) catch {
                     reportExecSetup(setup_gate, .policy_failed);
                     posix.exit(126);
                 };
             }
             reportExecSetup(setup_gate, .ready);
+            if (req.deny_fork) closeInheritedDescriptors() catch posix.exit(126);
 
             if (req.cwd) |cwd| {
                 _ = posix.chdir(cwd) catch posix.exit(127);
@@ -980,6 +1034,8 @@ fn runExecSession(session: *ExecSession) !void {
 
     var status: ?u32 = null;
     var tree_killed = false;
+    var wait4_cpu_ms: ?u64 = null;
+    const poll_ms: i32 = if (req.deny_fork) 10 else 100;
 
     if (wants_stdin) {
         const grant_bytes: usize = @min(max_queued_stdin_bytes, @as(usize, std.math.maxInt(u32)));
@@ -1193,12 +1249,13 @@ fn runExecSession(session: *ExecSession) !void {
         }
 
         if (nfds > 0) {
-            _ = try posix.poll(pollfds[0..nfds], 100);
+            _ = try posix.poll(pollfds[0..nfds], poll_ms);
         } else {
             if (status == null) {
-                const res = posix.waitpid(pid, posix.W.NOHANG);
+                const res = posix.wait4(pid, posix.W.NOHANG);
                 if (res.pid != 0) {
                     status = res.status;
+                    wait4_cpu_ms = res.cpu_ms;
                 } else {
                     // Avoid a tight busy loop when the child stays alive after
                     // closing stdout/stderr early.
@@ -1304,9 +1361,10 @@ fn runExecSession(session: *ExecSession) !void {
         }
 
         if (status == null) {
-            const res = posix.waitpid(pid, posix.W.NOHANG);
+            const res = posix.wait4(pid, posix.W.NOHANG);
             if (res.pid != 0) {
                 status = res.status;
+                wait4_cpu_ms = res.cpu_ms;
                 if (resource_group) |*group| {
                     group.killAll();
                     tree_killed = true;
@@ -1325,12 +1383,14 @@ fn runExecSession(session: *ExecSession) !void {
     }
 
     if (status == null) {
-        status = posix.waitpid(pid, 0).status;
+        const res = posix.wait4(pid, 0);
+        status = res.status;
+        wait4_cpu_ms = res.cpu_ms;
     }
 
     if (resource_group) |*group| {
         group.killAll();
-        resource_usage = group.settle();
+        resource_usage = group.settle(wait4_cpu_ms, req.deny_fork);
     }
 
     const term = parseStatus(status.?);
@@ -1432,12 +1492,23 @@ const ExecSetupStatus = enum(u8) {
 };
 
 /// Preserve setup reporting until exec while excluding inherited daemon descriptors
-fn confinePayload() !void {
+fn confinePayload(deny_fork: bool) !void {
     const close_range_cloexec: c_uint = 4;
     if (c.syscall(c.SYS_close_range, @as(c_uint, 3), @as(c_uint, std.math.maxInt(c_uint)), close_range_cloexec) != 0) {
         return error.PayloadDescriptorConfinementUnavailable;
     }
-    try payload_privileges.drop();
+    if (deny_fork) {
+        try payload_privileges.dropNoFork();
+    } else {
+        try payload_privileges.drop();
+    }
+}
+
+/// Close every descriptor except controller-owned standard streams
+fn closeInheritedDescriptors() !void {
+    if (c.syscall(c.SYS_close_range, @as(c_uint, 3), @as(c_uint, std.math.maxInt(c_uint)), @as(c_uint, 0)) != 0) {
+        return error.PayloadDescriptorConfinementUnavailable;
+    }
 }
 
 fn reportExecSetup(gate: ?[2]posix.fd_t, status: ExecSetupStatus) void {
@@ -1504,11 +1575,12 @@ const ResourceGroup = struct {
         id: u32,
         limits: ?protocol.ExecResourceLimits,
         deny_descendants: bool,
+        membership_ceiling: bool,
     ) !ResourceGroup {
         try requireControlFile("/sys/fs/cgroup/cgroup.controllers");
         try writeControlFile(
             "/sys/fs/cgroup/cgroup.subtree_control",
-            if (limits != null) "+memory +pids" else "+pids",
+            if (limits != null) "+cpu +memory +pids" else "+pids",
         );
         const group_path = try std.fmt.allocPrint(allocator, "/sys/fs/cgroup/gondolin-exec-{d}", .{id});
         const group_path_z = try allocator.dupeZ(u8, group_path);
@@ -1520,7 +1592,7 @@ const ResourceGroup = struct {
             const memory_max = try std.fmt.bufPrint(&path_buf, "{d}", .{configured.memory_bytes});
             try writeGroupControl(group_path, "memory.max", memory_max);
         }
-        const pids_limit: u32 = if (deny_descendants) 1 else if (limits) |configured| configured.pids else 1024;
+        const pids_limit: u32 = if (deny_descendants and !membership_ceiling) 1 else if (limits) |configured| configured.pids else 1024;
         const pids_max = try std.fmt.bufPrint(&path_buf, "{d}", .{pids_limit});
         try writeGroupControl(group_path, "pids.max", pids_max);
 
@@ -1618,7 +1690,7 @@ const ResourceGroup = struct {
         writeGroupControl(self.path, "cgroup.kill", "1") catch {};
     }
 
-    fn settle(self: *ResourceGroup) protocol.ExecResourceUsage {
+    fn settle(self: *ResourceGroup, wait4_cpu_ms: ?u64, crosscheck: bool) protocol.ExecResourceUsage {
         _ = self.pollExhaustion();
         self.killAll();
         var attempts: usize = 0;
@@ -1631,6 +1703,15 @@ const ResourceGroup = struct {
         // Collect after draining: final usage may exceed the last running sample.
         _ = self.pollExhaustion();
         const sample = if (self.observation_failed) null else self.last_sample;
+        if (crosscheck) {
+            const cgroup_usec = if (sample) |value| value.cpu_usec else null;
+            if (wait4_cpu_ms == null or cgroup_usec == null or
+                !resource_observation.cpuAgreesWithWait4(cgroup_usec.?, wait4_cpu_ms.?))
+            {
+                self.observation_failed = true;
+            }
+        }
+        const settled = if (self.observation_failed) null else self.last_sample;
         const group_path_z = std.heap.page_allocator.dupeZ(u8, self.path) catch null;
         var removed = false;
         if (group_path_z) |path_z| {
@@ -1638,13 +1719,15 @@ const ResourceGroup = struct {
             removed = c.rmdir(path_z.ptr) == 0;
         }
         return .{
-            .cpu_time_ms = if (sample) |value| if (value.cpu_usec) |usec| usec / 1000 else null else null,
-            .memory_peak_bytes = if (sample) |value| value.memory_peak else null,
-            .pids_peak = if (sample) |value| value.pids_peak else null,
+            .cpu_time_ms = if (settled) |value| if (value.cpu_usec) |usec| usec / 1000 else null else null,
+            .memory_peak_bytes = if (settled) |value| value.memory_peak else null,
+            .pids_peak = if (settled) |value| value.pids_peak else null,
             .observation_failed = self.observation_failed,
             .exhausted = self.exhausted,
             .descendant_denied = self.descendant_denied,
             .resource_group_removed = removed,
+            .wait4_cpu_ms = wait4_cpu_ms,
+            .cgroup_cpu_usec = if (sample) |value| value.cpu_usec else null,
         };
     }
 };
@@ -1730,7 +1813,7 @@ test "resource observation loss remains failed after files recover" {
     try std.testing.expect(group.observation_failed);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "cpu.stat", .data = "usage_usec 2000\n" });
     try std.testing.expect(group.pollExhaustion());
-    const usage = group.settle();
+    const usage = group.settle(null, false);
     try std.testing.expect(usage.observation_failed);
     try std.testing.expectEqual(@as(?u64, null), usage.cpu_time_ms);
     try std.testing.expectEqual(@as(?u64, null), usage.memory_peak_bytes);
@@ -1750,7 +1833,7 @@ test "truncated control-file reads cannot supply accounting" {
 }
 
 /// Install optional per-exec IPC and device mount namespaces before Landlock.
-fn applyNamespaceIsolation(isolate_ipc: bool, isolate_devices: bool) !void {
+fn applyNamespaceIsolation(isolate_ipc: bool, isolate_devices: bool, isolate_proc: bool) !void {
     if (!isolate_ipc and !isolate_devices) return;
 
     var flags: c_int = 0;
@@ -1762,23 +1845,39 @@ fn applyNamespaceIsolation(isolate_ipc: bool, isolate_devices: bool) !void {
     if (c.mount(null, "/", null, c.MS_REC | c.MS_PRIVATE, null) != 0) {
         return error.NamespaceIsolationUnavailable;
     }
-    const isolated_mounts = [_][]const u8{ "/dev", "/run", "/tmp", "/proc" };
+    const isolated_mounts = [_][]const u8{ "/dev", "/run", "/tmp" };
     for (isolated_mounts) |mount_path| {
-        const mount_path_z = try std.heap.page_allocator.dupeZ(u8, mount_path);
-        defer std.heap.page_allocator.free(mount_path_z);
-        if (c.mount(
-            "tmpfs",
-            mount_path_z.ptr,
-            "tmpfs",
-            c.MS_NOSUID | c.MS_NODEV | c.MS_NOEXEC,
-            "mode=000,size=4096",
-        ) != 0) return error.NamespaceIsolationUnavailable;
+        try overlayEmptyTmpfs(mount_path);
     }
+    if (isolate_proc) try overlayEmptyTmpfs("/proc");
 }
 
-/// Install inherited Linux Landlock execute and exact-write allow-lists.
-fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []const []const u8) !void {
-    if (executables.len == 0 and writable_paths.len == 0) return;
+fn overlayEmptyTmpfs(mount_path: []const u8) !void {
+    const mount_path_z = try std.heap.page_allocator.dupeZ(u8, mount_path);
+    defer std.heap.page_allocator.free(mount_path_z);
+    if (c.mount(
+        "tmpfs",
+        mount_path_z.ptr,
+        "tmpfs",
+        c.MS_NOSUID | c.MS_NODEV | c.MS_NOEXEC,
+        "mode=000,size=4096",
+    ) != 0) return error.NamespaceIsolationUnavailable;
+}
+
+/// Install inherited Linux Landlock execute, exact-write, and tree-root allow-lists.
+fn applyCapabilityPolicy(
+    executables: []const []const u8,
+    writable_paths: []const []const u8,
+    readable_directories: []const []const u8,
+    writable_directories: []const []const u8,
+) !void {
+    if (executables.len == 0 and
+        writable_paths.len == 0 and
+        readable_directories.len == 0 and
+        writable_directories.len == 0)
+    {
+        return;
+    }
 
     if (executables.len > 0) {
         try makeRootTreeNoExec();
@@ -1896,12 +1995,45 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
         ) < 0) return error.LandlockRuleFailed;
     }
 
+    for (readable_directories) |directory| {
+        const directory_fd = try openPinnedDirectory(directory);
+        defer _ = c.close(directory_fd);
+    }
+
+    const private_tree_access: u64 = c.LANDLOCK_ACCESS_FS_WRITE_FILE |
+        c.LANDLOCK_ACCESS_FS_REMOVE_FILE |
+        c.LANDLOCK_ACCESS_FS_MAKE_REG |
+        c.LANDLOCK_ACCESS_FS_TRUNCATE;
+    for (writable_directories) |directory| {
+        const directory_fd = try openPinnedDirectory(directory);
+        defer _ = c.close(directory_fd);
+        var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
+        path_attr.allowed_access = private_tree_access;
+        path_attr.parent_fd = directory_fd;
+        if (c.syscall(
+            c.SYS_landlock_add_rule,
+            ruleset_fd,
+            c.LANDLOCK_RULE_PATH_BENEATH,
+            &path_attr,
+            @as(c_uint, 0),
+        ) < 0) return error.LandlockRuleFailed;
+    }
+
     if (c.prctl(c.PR_SET_NO_NEW_PRIVS, @as(c_ulong, 1), @as(c_ulong, 0), @as(c_ulong, 0), @as(c_ulong, 0)) != 0) {
         return error.NoNewPrivilegesFailed;
     }
     if (c.syscall(c.SYS_landlock_restrict_self, ruleset_fd, @as(c_uint, 0)) < 0) {
         return error.LandlockRestrictFailed;
     }
+}
+
+/// Open a directory by its literal path without realpath substitution
+fn openPinnedDirectory(directory: []const u8) !c_int {
+    const directory_z = try std.heap.page_allocator.dupeZ(u8, directory);
+    defer std.heap.page_allocator.free(directory_z);
+    const directory_fd = c.open(directory_z.ptr, c.O_PATH | c.O_DIRECTORY | c.O_NOFOLLOW | c.O_CLOEXEC);
+    if (directory_fd < 0) return error.InvalidTreeRoot;
+    return directory_fd;
 }
 
 /// Grant only the interpreter recorded in an admitted immutable ELF image.

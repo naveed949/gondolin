@@ -41,6 +41,10 @@ export type ExecResourceUsage = {
   resourceGroupRemoved: boolean;
   /** Sticky observation loss; required by exec.resource-observation/v2 */
   observationFailed?: boolean;
+  /** Independent wait4 subtree CPU in `ms`, or `null` when unavailable */
+  wait4CpuMs?: number | null;
+  /** Payload cgroup CPU in `us` used for the wait4 cross-check, or `null` */
+  cgroupCpuUsec?: number | null;
 };
 
 /**
@@ -156,6 +160,14 @@ export type ExecOptions = {
   isolateIpc?: boolean;
   /** hide guest device nodes and ambient runtime socket directories */
   isolateDevices?: boolean;
+  /** Overlay `/proc` together with device isolation; keep procfs when false */
+  isolateProc?: boolean;
+  /** Deny clone/fork/vfork after the entrypoint image is executing */
+  denyFork?: boolean;
+  /** Repository-style read directory trees for Landlock */
+  allowedReadableDirectories?: string[];
+  /** Private write directory trees for Landlock */
+  allowedWritableDirectories?: string[];
 
   /** stdout handling (default: "buffer") */
   stdout?: ExecOutputMode;

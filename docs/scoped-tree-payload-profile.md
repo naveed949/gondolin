@@ -1,7 +1,7 @@
 # Scoped tree and payload resource profile
 
-Status: design reviewed against the native contract; implementation and
-qualification pending. No active runtime feature is advertised.
+Status: runtime implemented against the native contract; public manifest
+advertising, AdaptiveSandbox admission, and qualification remain pending.
 Tracking: [AdaptiveSandbox #39](https://github.com/naveed949/AdaptiveSandbox/issues/39)
 and [Gondolin #23](https://github.com/naveed949/gondolin/issues/23).
 The reference is AdaptiveSandbox's `docs/scoped-runner-native-contract.md` at

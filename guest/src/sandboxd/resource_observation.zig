@@ -50,6 +50,14 @@ pub const Sample = struct {
     }
 };
 
+/// Native wait4/cgroup CPU allowance in `us`
+pub const cpu_crosscheck_allowance_usec: u64 = 5000;
+
+pub fn cpuAgreesWithWait4(cgroup_usec: u64, wait4_ms: u64) bool {
+    const wait4_usec = wait4_ms *| 1000;
+    return wait4_usec <= cgroup_usec +| cpu_crosscheck_allowance_usec;
+}
+
 test "missing, malformed, duplicate and overflowing counters are unavailable" {
     try std.testing.expectEqual(@as(u64, 0), try counter("max 0\n", "max"));
     try std.testing.expectEqual(@as(u64, 123), try counter("user_usec 3\nusage_usec\t123\n", "usage_usec"));
@@ -72,4 +80,10 @@ test "any accounting counter regression rejects the observation" {
     var missing = baseline;
     missing.cpu_usec = null;
     try std.testing.expectError(error.CounterRegression, missing.checkAfter(baseline));
+}
+
+test "wait4 CPU may trail cgroup by five milliseconds but not more" {
+    try std.testing.expect(cpuAgreesWithWait4(10_000, 10));
+    try std.testing.expect(cpuAgreesWithWait4(10_000, 15));
+    try std.testing.expect(!cpuAgreesWithWait4(10_000, 16));
 }
