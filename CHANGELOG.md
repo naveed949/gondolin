@@ -4,6 +4,14 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Add a Linux live root-tree enforcement foundation for the future
+  `scoped-tree-runner/v1` profile: pin repository/cache/temp directory identities,
+  resolve paths with `openat2` beneath the admitted descriptor, and enforce the
+  accepted repository/private operation table. The profile remains unsupported
+  and is not advertised. Payload launch, guest ambient confinement, and
+  payload-only resource accounting remain unimplemented; no qualification or
+  compatibility-row changes.
+
 ## 0.12.1-adaptivesandbox.8
 
 - Fail scoped-runner settlement closed when guest cgroup accounting is missing,
@@ -58,7 +66,6 @@ All notable changes to Gondolin are documented here.
 - Add evidence v3 publication settlement for exact writers, distinguishing known
   visibility from uncertainty and tracking host staging cleanup independently.
   This is experimental evidence honesty, not durable recovery or qualification.
-
 
 ## 0.12.1-adaptivesandbox.2
 

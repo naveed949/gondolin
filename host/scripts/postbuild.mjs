@@ -32,6 +32,22 @@ function copyVendoredNodeVfs(pkgRoot) {
   fs.cpSync(vendoredSource, vendoredDest, { recursive: true });
 }
 
+function copyScopedTreeNative(pkgRoot) {
+  const source = path.join(pkgRoot, "src", "native", "scoped-tree-linux.c");
+  const dest = path.join(
+    pkgRoot,
+    "dist",
+    "src",
+    "native",
+    "scoped-tree-linux.c",
+  );
+  if (!fs.existsSync(source)) {
+    throw new Error(`missing scoped-tree Linux helper source: ${source}`);
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(source, dest);
+}
+
 export function findGuestSourceRoot(
   pkgRoot,
   cwd = process.cwd(),
@@ -78,10 +94,7 @@ function rewriteDeclarationsInDir(dirPath) {
 
     const source = fs.readFileSync(fullPath, "utf8");
     const rewritten = source
-      .replace(
-        /(from\s+["'])(\.{1,2}\/[^"']+)\.ts(["'])/g,
-        "$1$2.js$3",
-      )
+      .replace(/(from\s+["'])(\.{1,2}\/[^"']+)\.ts(["'])/g, "$1$2.js$3")
       .replace(
         /(import\(\s*["'])(\.{1,2}\/[^"']+)\.ts(["']\s*\))/g,
         "$1$2.js$3",
@@ -100,6 +113,7 @@ export function runPostbuild({
   stderr = process.stderr,
 } = {}) {
   copyVendoredNodeVfs(pkgRoot);
+  copyScopedTreeNative(pkgRoot);
 
   const guestDistRoot = path.join(pkgRoot, "dist", "guest");
   fs.rmSync(guestDistRoot, { recursive: true, force: true });
