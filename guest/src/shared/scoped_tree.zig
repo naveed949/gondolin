@@ -78,11 +78,42 @@ fn statxFd(fd: i32) Error!linux.Statx {
     return stx;
 }
 
-pub const Root = struct {
-    kind: RootKind,
+fn copyZ(buf: *[std.fs.max_path_bytes:0]u8, value: []const u8) Error![:0]const u8 {
+    if (value.len >= buf.len) return error.Denied;
+    @memcpy(buf[0..value.len], value);
+    buf[value.len] = 0;
+    return buf[0..value.len :0];
+}
+
+fn parentName(relative: [*:0]const u8) Error!struct { parent: []const u8, name: []const u8 } {
+    const span = std.mem.span(relative);
+    if (span.len == 0) return error.Invalid;
+    const slash = std.mem.lastIndexOfScalar(u8, span, '/');
+    if (slash == null) return .{ .parent = ".", .name = span };
+    if (slash.? == 0 or slash.? + 1 >= span.len) return error.Denied;
+    return .{ .parent = span[0..slash.?], .name = span[slash.? + 1 ..] };
+}
+
+const HandleSlot = struct {
+    /// Session-local handle identity, never reused after close
+    id: u32,
+    /// Owned kernel descriptor for the opened regular file
     fd: i32,
+};
+
+pub const Root = struct {
+    /// Live root kind
+    kind: RootKind,
+    /// Pinned directory descriptor
+    fd: i32,
+    /// Admitted directory identity
     identity: Identity,
+    /// Closed-descriptor flag
     closed: bool = false,
+    /// Open-handle table; closed IDs are never reused
+    handles: [32]?HandleSlot = .{null} ** 32,
+    /// Next unused handle identity
+    next_handle_id: u32 = 1,
 
     pub fn pin(kind: RootKind, host_path: [*:0]const u8) Error!Root {
         var how = OpenHow{
@@ -115,6 +146,10 @@ pub const Root = struct {
 
     pub fn close(self: *Root) void {
         if (self.closed) return;
+        for (&self.handles) |*slot| {
+            if (slot.*) |owned| closeFd(owned.fd);
+            slot.* = null;
+        }
         closeFd(self.fd);
         self.closed = true;
     }
@@ -181,29 +216,97 @@ pub const Root = struct {
         defer closeFd(inspect);
         const stx = try statxFd(inspect);
         if (!linux.S.ISREG(stx.mode)) return error.Denied;
-        if (linux.errno(linux.unlinkat(self.fd, relative, 0)) != .SUCCESS) return error.Denied;
+        const parts = try parentName(relative);
+        var parent_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        var name_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        const parent_z = try copyZ(&parent_buf, parts.parent);
+        const name_z = try copyZ(&name_buf, parts.name);
+        const parent_fd = try self.openPath(parent_z, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+        defer closeFd(parent_fd);
+        if (linux.errno(linux.unlinkat(parent_fd, name_z, 0)) != .SUCCESS) return error.Denied;
     }
 
     pub fn renameSameDirectory(self: *const Root, old_name: [*:0]const u8, new_name: [*:0]const u8) Error!void {
         if (!self.isPrivate()) return error.Denied;
-        if (std.mem.indexOfScalar(u8, std.mem.span(old_name), '/') != null) return error.Denied;
-        if (std.mem.indexOfScalar(u8, std.mem.span(new_name), '/') != null) return error.Denied;
+        const old_parts = try parentName(old_name);
+        const new_parts = try parentName(new_name);
+        if (!std.mem.eql(u8, old_parts.parent, new_parts.parent)) return error.Denied;
         const inspect = try self.openPath(old_name, .{ .PATH = true, .NOFOLLOW = true, .CLOEXEC = true }, 0);
         defer closeFd(inspect);
         const stx = try statxFd(inspect);
         if (!linux.S.ISREG(stx.mode)) return error.Denied;
-        if (linux.errno(linux.renameat(self.fd, old_name, self.fd, new_name)) != .SUCCESS) return error.Denied;
+        var parent_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        var old_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        var new_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        const parent_z = try copyZ(&parent_buf, old_parts.parent);
+        const old_z = try copyZ(&old_buf, old_parts.name);
+        const new_z = try copyZ(&new_buf, new_parts.name);
+        const parent_fd = try self.openPath(parent_z, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+        defer closeFd(parent_fd);
+        if (linux.errno(linux.renameat(parent_fd, old_z, parent_fd, new_z)) != .SUCCESS) return error.Denied;
     }
 
     pub fn linkSameDirectory(self: *const Root, existing_name: [*:0]const u8, new_name: [*:0]const u8) Error!void {
         if (!self.isPrivate()) return error.Denied;
-        if (std.mem.indexOfScalar(u8, std.mem.span(existing_name), '/') != null) return error.Denied;
-        if (std.mem.indexOfScalar(u8, std.mem.span(new_name), '/') != null) return error.Denied;
+        const existing_parts = try parentName(existing_name);
+        const new_parts = try parentName(new_name);
+        if (!std.mem.eql(u8, existing_parts.parent, new_parts.parent)) return error.Denied;
         const inspect = try self.openPath(existing_name, .{ .PATH = true, .NOFOLLOW = true, .CLOEXEC = true }, 0);
         defer closeFd(inspect);
         const stx = try statxFd(inspect);
         if (!linux.S.ISREG(stx.mode)) return error.Denied;
-        if (linux.errno(linux.linkat(self.fd, existing_name, self.fd, new_name, 0)) != .SUCCESS) return error.Denied;
+        var parent_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        var existing_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        var new_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+        const parent_z = try copyZ(&parent_buf, existing_parts.parent);
+        const existing_z = try copyZ(&existing_buf, existing_parts.name);
+        const new_z = try copyZ(&new_buf, new_parts.name);
+        const parent_fd = try self.openPath(parent_z, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+        defer closeFd(parent_fd);
+        if (linux.errno(linux.linkat(parent_fd, existing_z, parent_fd, new_z, 0)) != .SUCCESS) return error.Denied;
+    }
+
+    pub fn openHandle(self: *Root, relative: [*:0]const u8) Error!u32 {
+        const fd = try self.openPath(relative, .{ .ACCMODE = .RDONLY, .NONBLOCK = true, .CLOEXEC = true }, 0);
+        errdefer closeFd(fd);
+        const stx = try statxFd(fd);
+        if (!linux.S.ISREG(stx.mode)) return error.Denied;
+        for (&self.handles) |*slot| {
+            if (slot.* == null) {
+                const id = self.next_handle_id;
+                self.next_handle_id += 1;
+                slot.* = .{ .id = id, .fd = fd };
+                return id;
+            }
+        }
+        closeFd(fd);
+        return error.Unavailable;
+    }
+
+    pub fn readHandle(self: *const Root, id: u32, buffer: []u8) Error!usize {
+        for (self.handles) |slot| {
+            if (slot) |owned| {
+                if (owned.id == id) {
+                    const n = linux.read(owned.fd, buffer.ptr, buffer.len);
+                    if (linux.errno(n) != .SUCCESS) return error.Unavailable;
+                    return n;
+                }
+            }
+        }
+        return error.Denied;
+    }
+
+    pub fn closeHandle(self: *Root, id: u32) Error!void {
+        for (&self.handles) |*slot| {
+            if (slot.*) |owned| {
+                if (owned.id == id) {
+                    closeFd(owned.fd);
+                    slot.* = null;
+                    return;
+                }
+            }
+        }
+        return error.Denied;
     }
 
     pub fn mkdirDenied(_: *const Root, _: [*:0]const u8) Error!void {
@@ -316,6 +419,15 @@ test "operation table denies repository writes and private directory mutations" 
     try cache.unlinkFile("late-link.txt");
     try cache.createFile("nested/late.txt");
     try cache.writeFile("nested/late.txt", "created-after-admission");
+    try cache.renameSameDirectory("nested/late.txt", "nested/moved.txt");
+    try cache.linkSameDirectory("nested/moved.txt", "nested/linked.txt");
+    const handle = try cache.openHandle("nested/linked.txt");
+    try cache.unlinkFile("nested/linked.txt");
+    var handle_buf: [32]u8 = undefined;
+    const hn = try cache.readHandle(handle, &handle_buf);
+    try std.testing.expectEqualStrings("created-after-admission", handle_buf[0..hn]);
+    try cache.closeHandle(handle);
+    try std.testing.expectError(error.Denied, cache.readHandle(handle, &handle_buf));
 }
 
 test "live tree sees files created after pinning" {

@@ -174,10 +174,3 @@ export function isDirectory(
 ): boolean {
   return (mode & constants.S_IFMT) === constants.S_IFDIR;
 }
-
-export function isSymlink(
-  mode: number,
-  constants: LinuxOpenat2Constants,
-): boolean {
-  return (mode & constants.S_IFMT) === constants.S_IFLNK;
-}

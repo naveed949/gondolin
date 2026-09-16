@@ -397,15 +397,30 @@ test(
         () => session.repository.writeFile("early.txt", Buffer.from("x")),
         /filesystem\.repository\.write/,
       );
-      assert.throws(() => session.repository.mkdir("dir"), /filesystem\.mkdir/);
+      assert.throws(
+        () => session.repository.mkdir("dir"),
+        /filesystem\.repository\.mkdir/,
+      );
       assert.throws(
         () => session.cache.symlink("early.txt", "link"),
-        /filesystem\.symlink/,
+        /filesystem\.private\.symlink/,
       );
-      assert.throws(() => session.cache.mount("nested"), /filesystem\.mount/);
-      assert.throws(() => session.cache.rmdir("nested"), /filesystem\.rmdir/);
-      assert.throws(() => session.cache.chmod("nested"), /filesystem\.chmod/);
-      assert.throws(() => session.cache.chown("nested"), /filesystem\.chown/);
+      assert.throws(
+        () => session.cache.mount("nested"),
+        /filesystem\.private\.mount/,
+      );
+      assert.throws(
+        () => session.cache.rmdir("nested"),
+        /filesystem\.private\.rmdir/,
+      );
+      assert.throws(
+        () => session.cache.chmod("nested"),
+        /filesystem\.private\.chmod/,
+      );
+      assert.throws(
+        () => session.cache.chown("nested"),
+        /filesystem\.private\.chown/,
+      );
       session.cache.createFile("nested/late.txt");
       session.cache.writeFile(
         "nested/late.txt",

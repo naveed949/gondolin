@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -21,15 +22,15 @@ export const SCOPED_TREE_RUNNER_ADMISSION = "scoped-tree-runner/v1" as const;
 export type ScopedTreeRootKind = "repository" | "cache" | "temp";
 
 export type ScopedTreeRootIdentity = {
-  /** Filesystem device major identity */
+  /** Decimal filesystem device major identity */
   devMajor: string;
-  /** Filesystem device minor identity */
+  /** Decimal filesystem device minor identity */
   devMinor: string;
-  /** Directory inode identity */
+  /** Decimal directory inode identity */
   ino: string;
-  /** Creation time seconds from `statx` `btime` */
+  /** Creation time from `statx` `btime` in `s` */
   btimeSec: string;
-  /** Creation time nanoseconds from `statx` `btime` in `ns` */
+  /** Creation time from `statx` `btime` in `ns` */
   btimeNsec: number;
 };
 
@@ -282,6 +283,16 @@ function catchLinux<T>(capabilityPath: string, operation: () => T): T {
       throw error;
     }
     const errno = (error as NodeJS.ErrnoException).errno;
+    if (
+      errno === os.constants.errno.ENOSYS ||
+      errno === os.constants.errno.EOPNOTSUPP
+    ) {
+      deny(
+        "unsupported",
+        capabilityPath,
+        "kernel-assisted resolution is unavailable on this host",
+      );
+    }
     deny(
       "denied",
       capabilityPath,
@@ -648,7 +659,7 @@ export class ScopedTreeRoot {
   mkdir(relativePath: string): never {
     deny(
       "denied",
-      "filesystem.mkdir",
+      this.capability("mkdir"),
       `create directory is denied at ${relativePath}`,
     );
   }
@@ -656,7 +667,7 @@ export class ScopedTreeRoot {
   rmdir(relativePath: string): never {
     deny(
       "denied",
-      "filesystem.rmdir",
+      this.capability("rmdir"),
       `remove directory is denied at ${relativePath}`,
     );
   }
@@ -664,7 +675,7 @@ export class ScopedTreeRoot {
   symlink(target: string, relativePath: string): never {
     deny(
       "denied",
-      "filesystem.symlink",
+      this.capability("symlink"),
       `create symlink is denied from ${relativePath} to ${target}`,
     );
   }
@@ -672,7 +683,7 @@ export class ScopedTreeRoot {
   chmod(relativePath: string): never {
     deny(
       "denied",
-      "filesystem.chmod",
+      this.capability("chmod"),
       `change mode is denied at ${relativePath}`,
     );
   }
@@ -680,13 +691,17 @@ export class ScopedTreeRoot {
   chown(relativePath: string): never {
     deny(
       "denied",
-      "filesystem.chown",
+      this.capability("chown"),
       `change ownership is denied at ${relativePath}`,
     );
   }
 
   mount(relativePath: string): never {
-    deny("denied", "filesystem.mount", `mount is denied at ${relativePath}`);
+    deny(
+      "denied",
+      this.capability("mount"),
+      `mount is denied at ${relativePath}`,
+    );
   }
 
   openHandle(relativePath: string, access: "read" | "write"): ScopedTreeHandle {
@@ -885,12 +900,17 @@ export type ScopedTreeRootsSpec = {
   cache: string;
   /** Fresh invocation-owned temporary write root */
   temp: string;
-  /** Extra adapter or guest inputs; any present value fails closed */
+  /** Adapter hook object rejected at admission */
   hooks?: unknown;
+  /** Host VFS widening object rejected at admission */
   vfs?: unknown;
+  /** Extra mount table rejected at admission */
   mounts?: unknown;
+  /** Guest configuration widening object rejected at admission */
   guestConfig?: unknown;
+  /** Callback table rejected at admission */
   callbacks?: unknown;
+  /** Backend selection widening value rejected at admission */
   backend?: unknown;
 };
 
@@ -1272,12 +1292,18 @@ export class ScopedTreeRunnerInvocationContext {
   }
 
   invoke(input: unknown): never {
-    canonicalizeScopedTreeRunnerInvocationRequest(input);
+    let requestError: unknown;
+    try {
+      canonicalizeScopedTreeRunnerInvocationRequest(input);
+    } catch (error) {
+      requestError = error;
+    }
     try {
       this.session.dispose();
-    } catch {
-      // Launch is unsupported; still attempt to drop pinned descriptors.
+    } catch (error) {
+      throw error;
     }
+    if (requestError) throw requestError;
     admission(
       "unsupported",
       "request.launch",
