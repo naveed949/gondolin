@@ -640,6 +640,30 @@ test("vm internals: mergeEnvInputs and buildShellEnv normalize TERM", () => {
   }
 });
 
+test("vm internals: mergeExecEnv omits VM defaultEnv when clearEnv is set", () => {
+  const inherited = __test.mergeExecEnv(
+    { GONDOLIN_SCOPED_TREE_CHALLENGE: "seeded-credential", PATH: "/bin" },
+    ["PAYLOAD=1"],
+  );
+  assert.ok(inherited);
+  assert.ok(inherited.includes("GONDOLIN_SCOPED_TREE_CHALLENGE=seeded-credential"));
+  assert.ok(inherited.includes("PAYLOAD=1"));
+
+  const cleared = __test.mergeExecEnv(
+    { GONDOLIN_SCOPED_TREE_CHALLENGE: "seeded-credential" },
+    [],
+    true,
+  );
+  assert.equal(cleared, undefined);
+
+  const clearedWithPayload = __test.mergeExecEnv(
+    { GONDOLIN_SCOPED_TREE_CHALLENGE: "seeded-credential" },
+    ["PAYLOAD=1"],
+    true,
+  );
+  assert.deepEqual(clearedWithPayload, ["PAYLOAD=1"]);
+});
+
 test("vm internals: file helpers short-circuit VFS mounts", async () => {
   const provider = new MemoryProvider();
   const { vm, cleanup } = makeVm({

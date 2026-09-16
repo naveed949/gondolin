@@ -5,6 +5,9 @@ NODE ?= node
 RUN_PARALLEL ?= ../scripts/run-parallel
 PRETTIER ?= ../node_modules/.bin/prettier
 
+UNIT_TESTS := $(filter-out $(wildcard test/*.integration.test.ts),$(wildcard test/*.test.ts))
+INTEGRATION_TESTS := $(wildcard test/*.integration.test.ts)
+
 # Host fuzzer target name (see host/fuzz/targets)
 TARGET ?= virtio
 
@@ -28,8 +31,8 @@ format:
 		"README.md"
 
 test:
-	@$(RUN_PARALLEL) -j 1 \
-		"host:test" "$(NODE) --test test/*.test.ts"
+	@$(NODE) --test $(UNIT_TESTS)
+	@$(NODE) --test --test-concurrency=1 $(INTEGRATION_TESTS)
 
 fuzz:
 	@$(PNPM) run fuzz -- $(TARGET)

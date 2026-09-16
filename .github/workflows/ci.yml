@@ -99,6 +99,9 @@ jobs:
       - name: Verify descendant-denial feature marker
         run: grep -aFq 'gondolin-feature:exec.descendants-denied/v1' guest/zig-out/bin/sandboxd
 
+      - name: Verify scoped-tree-runner feature marker
+        run: grep -aFq 'gondolin-feature:exec.scoped-tree-runner/v1' guest/zig-out/bin/sandboxd
+
       - name: Build guest image
         run: |
           NODE_BIN="$(node -p 'process.execPath')"
@@ -156,6 +159,9 @@ jobs:
 
       - name: Verify descendant-denial feature marker
         run: grep -aFq 'gondolin-feature:exec.descendants-denied/v1' guest/zig-out/bin/sandboxd
+
+      - name: Verify scoped-tree-runner feature marker
+        run: grep -aFq 'gondolin-feature:exec.scoped-tree-runner/v1' guest/zig-out/bin/sandboxd
 
       - name: Verify Docker is available
         run: docker info
@@ -434,9 +440,10 @@ jobs:
           GONDOLIN_GUEST_DIR: ${{ github.workspace }}/guest/image/out
 
       - name: Run tests
-        # Run guest + host tests sequentially to avoid running multiple QEMU instances
-        # concurrently (which can hang/time out on some CI runners).
-        timeout-minutes: 20
+        # Guest tests first, then host unit tests, then VM integration tests with
+        # one QEMU at a time. Node's default file parallelism otherwise overlaps
+        # KVM guests and can abort the integration worker without TAP.
+        timeout-minutes: 30
         run: |
           NODE_BIN="$(node -p 'process.execPath')"
           make -C guest test NODE="$NODE_BIN" GONDOLIN_BUILD_CONFIG="../images/alpine-base.json"

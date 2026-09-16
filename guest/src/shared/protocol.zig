@@ -63,6 +63,10 @@ pub const ExecResourceUsage = struct {
     resource_group_removed: bool,
     /// Sticky accounting observation failure during execution or settlement
     observation_failed: bool = false,
+    /// Independent wait4 subtree CPU in `ms`, or unavailable
+    wait4_cpu_ms: ?u64 = null,
+    /// Payload cgroup CPU in `us` used for the wait4 cross-check
+    cgroup_cpu_usec: ?u64 = null,
 };
 
 pub const ExecRequest = struct {
@@ -88,6 +92,14 @@ pub const ExecRequest = struct {
     isolate_ipc: bool,
     /// empty device and ambient-socket mounts required before process launch
     isolate_devices: bool,
+    /// Keep guest procfs visible while still isolating devices
+    isolate_proc: bool = true,
+    /// Deny clone/fork/vfork after the entrypoint image is executing
+    deny_fork: bool = false,
+    /// Repository-style read directory trees for Landlock
+    allowed_readable_directories: []const []const u8 = &.{},
+    /// Private write directory trees for Landlock
+    allowed_writable_directories: []const []const u8 = &.{},
     /// working directory
     cwd: ?[]const u8,
     /// stdin-frame availability
@@ -481,7 +493,7 @@ pub fn encodeExecResponse(
     }
     if (resource_usage) |usage| {
         try cbor.writeText(w, "resource_usage");
-        try cbor.writeMapStart(w, 7);
+        try cbor.writeMapStart(w, 9);
         try cbor.writeText(w, "cpuTimeMs");
         if (usage.cpu_time_ms) |value| try cbor.writeUInt(w, value) else try cbor.writeNull(w);
         try cbor.writeText(w, "memoryPeakBytes");
@@ -500,6 +512,10 @@ pub fn encodeExecResponse(
         try cbor.writeBool(w, usage.resource_group_removed);
         try cbor.writeText(w, "observationFailed");
         try cbor.writeBool(w, usage.observation_failed);
+        try cbor.writeText(w, "wait4CpuMs");
+        if (usage.wait4_cpu_ms) |value| try cbor.writeUInt(w, value) else try cbor.writeNull(w);
+        try cbor.writeText(w, "cgroupCpuUsec");
+        if (usage.cgroup_cpu_usec) |value| try cbor.writeUInt(w, value) else try cbor.writeNull(w);
     }
 
     return try buf.toOwnedSlice(allocator);
@@ -893,6 +909,22 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         isolate_devices = try expectBool(isolate_devices_val);
     }
 
+    var isolate_proc = isolate_devices;
+    if (cbor.getMapValue(payload, "isolate_proc")) |isolate_proc_val| {
+        isolate_proc = try expectBool(isolate_proc_val);
+    }
+
+    var deny_fork = false;
+    if (cbor.getMapValue(payload, "deny_fork")) |deny_fork_val| {
+        deny_fork = try expectBool(deny_fork_val);
+    }
+
+    const allowed_readable_directories = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_readable_directories"));
+    errdefer allocator.free(allowed_readable_directories);
+
+    const allowed_writable_directories = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_writable_directories"));
+    errdefer allocator.free(allowed_writable_directories);
+
     var cwd: ?[]const u8 = null;
     if (cbor.getMapValue(payload, "cwd")) |cwd_val| {
         cwd = try expectText(cwd_val);
@@ -932,6 +964,10 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         .resource_limits = resource_limits,
         .isolate_ipc = isolate_ipc,
         .isolate_devices = isolate_devices,
+        .isolate_proc = isolate_proc,
+        .deny_fork = deny_fork,
+        .allowed_readable_directories = allowed_readable_directories,
+        .allowed_writable_directories = allowed_writable_directories,
         .cwd = cwd,
         .stdin = stdin_flag,
         .pty = pty_flag,
