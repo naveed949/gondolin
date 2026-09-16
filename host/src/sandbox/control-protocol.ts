@@ -43,8 +43,12 @@ export type ExecCommandMessage = {
   allowed_executables?: string[];
   /** exact writable files enforced for the complete process tree */
   allowed_writable_paths?: string[];
+  /** Absolute directory trees permitted for regular-file create/write/unlink */
+  allowed_writable_trees?: string[];
   /** Additional-process denial within the guest execution group */
   deny_descendants?: boolean;
+  /** Seccomp denial of fork and non-thread clone without changing the PID ceiling */
+  deny_fork?: boolean;
   /** resource controllers installed before releasing the exec start gate */
   resource_limits?: {
     /** complete process-tree CPU time in `ms` */

@@ -39,6 +39,8 @@ pub export var payload_feature_marker: [payload_marker.len]u8 = payload_marker.*
 
 const resource_marker = "gondolin-feature:exec.resource-observation/v2";
 pub export var resource_feature_marker: [resource_marker.len]u8 = resource_marker.*;
+const tree_marker = "gondolin-feature:exec.scoped-tree-vfs/v1";
+pub export var tree_feature_marker: [tree_marker.len]u8 = tree_marker.*;
 
 test {
     _ = resource_observation;
@@ -84,7 +86,9 @@ const OwnedExecRequest = struct {
     clear_env: bool,
     allowed_executables: []const []const u8,
     allowed_writable_paths: []const []const u8,
+    allowed_writable_trees: []const []const u8,
     deny_descendants: bool,
+    deny_fork: bool,
     resource_limits: ?protocol.ExecResourceLimits,
     isolate_ipc: bool,
     isolate_devices: bool,
@@ -104,6 +108,8 @@ const OwnedExecRequest = struct {
         allocator.free(self.allowed_executables);
         for (self.allowed_writable_paths) |entry| allocator.free(entry);
         allocator.free(self.allowed_writable_paths);
+        for (self.allowed_writable_trees) |entry| allocator.free(entry);
+        allocator.free(self.allowed_writable_trees);
         if (self.cwd) |cwd| allocator.free(cwd);
     }
 };
@@ -238,6 +244,17 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         writable_len += 1;
     }
 
+    var allowed_writable_trees = try allocator.alloc([]const u8, req.allowed_writable_trees.len);
+    var tree_len: usize = 0;
+    errdefer {
+        for (allowed_writable_trees[0..tree_len]) |entry| allocator.free(entry);
+        allocator.free(allowed_writable_trees);
+    }
+    for (req.allowed_writable_trees) |entry| {
+        allowed_writable_trees[tree_len] = try allocator.dupe(u8, entry);
+        tree_len += 1;
+    }
+
     const cwd = if (req.cwd) |value| try allocator.dupe(u8, value) else null;
     errdefer if (cwd) |value| allocator.free(value);
 
@@ -252,7 +269,9 @@ fn cloneExecRequest(allocator: std.mem.Allocator, req: protocol.ExecRequest) !Ow
         .clear_env = req.clear_env,
         .allowed_executables = allowed_executables,
         .allowed_writable_paths = allowed_writable_paths,
+        .allowed_writable_trees = allowed_writable_trees,
         .deny_descendants = req.deny_descendants,
+        .deny_fork = req.deny_fork,
         .resource_limits = req.resource_limits,
         .isolate_ipc = req.isolate_ipc,
         .isolate_devices = req.isolate_devices,
@@ -769,6 +788,7 @@ fn runExecSession(session: *ExecSession) !void {
             req.id,
             req.resource_limits,
             req.deny_descendants,
+            req.deny_fork,
         )
     else
         null;
@@ -804,7 +824,9 @@ fn runExecSession(session: *ExecSession) !void {
     const needs_setup_status = req.isolate_ipc or
         req.isolate_devices or
         req.allowed_executables.len > 0 or
-        req.allowed_writable_paths.len > 0;
+        req.allowed_writable_paths.len > 0 or
+        req.allowed_writable_trees.len > 0 or
+        req.deny_fork;
     var setup_gate: ?[2]posix.fd_t = if (needs_setup_status)
         try posix.pipe2(.{ .CLOEXEC = true })
     else
@@ -838,12 +860,18 @@ fn runExecSession(session: *ExecSession) !void {
                 reportExecSetup(setup_gate, .namespace_failed);
                 posix.exit(126);
             };
-            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
+            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths, req.allowed_writable_trees) catch {
                 reportExecSetup(setup_gate, .policy_failed);
                 posix.exit(126);
             };
             if (req.allowed_executables.len > 0) {
                 confinePayload() catch {
+                    reportExecSetup(setup_gate, .policy_failed);
+                    posix.exit(126);
+                };
+            }
+            if (req.deny_fork) {
+                payload_privileges.denyProcessCreation() catch {
                     reportExecSetup(setup_gate, .policy_failed);
                     posix.exit(126);
                 };
@@ -929,12 +957,18 @@ fn runExecSession(session: *ExecSession) !void {
                 posix.exit(126);
             };
 
-            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths) catch {
+            applyCapabilityPolicy(req.allowed_executables, req.allowed_writable_paths, req.allowed_writable_trees) catch {
                 reportExecSetup(setup_gate, .policy_failed);
                 posix.exit(126);
             };
             if (req.allowed_executables.len > 0) {
                 confinePayload() catch {
+                    reportExecSetup(setup_gate, .policy_failed);
+                    posix.exit(126);
+                };
+            }
+            if (req.deny_fork) {
+                payload_privileges.denyProcessCreation() catch {
                     reportExecSetup(setup_gate, .policy_failed);
                     posix.exit(126);
                 };
@@ -1196,9 +1230,10 @@ fn runExecSession(session: *ExecSession) !void {
             _ = try posix.poll(pollfds[0..nfds], 100);
         } else {
             if (status == null) {
-                const res = posix.waitpid(pid, posix.W.NOHANG);
+                const res = posix.wait4(pid, posix.W.NOHANG);
                 if (res.pid != 0) {
                     status = res.status;
+                    if (resource_group) |*group| group.wait4_cpu_usec = res.cpu_usec;
                 } else {
                     // Avoid a tight busy loop when the child stays alive after
                     // closing stdout/stderr early.
@@ -1304,10 +1339,11 @@ fn runExecSession(session: *ExecSession) !void {
         }
 
         if (status == null) {
-            const res = posix.waitpid(pid, posix.W.NOHANG);
+            const res = posix.wait4(pid, posix.W.NOHANG);
             if (res.pid != 0) {
                 status = res.status;
                 if (resource_group) |*group| {
+                    group.wait4_cpu_usec = res.cpu_usec;
                     group.killAll();
                     tree_killed = true;
                 }
@@ -1325,7 +1361,9 @@ fn runExecSession(session: *ExecSession) !void {
     }
 
     if (status == null) {
-        status = posix.waitpid(pid, 0).status;
+        const res = posix.wait4(pid, 0);
+        status = res.status;
+        if (resource_group) |*group| group.wait4_cpu_usec = res.cpu_usec;
     }
 
     if (resource_group) |*group| {
@@ -1494,6 +1532,8 @@ const ResourceGroup = struct {
     path: []const u8,
     limits: ?protocol.ExecResourceLimits,
     deny_descendants: bool,
+    deny_fork: bool = false,
+    wait4_cpu_usec: ?u64 = null,
     exhausted: ?protocol.ExecResourceExhaustion = null,
     descendant_denied: bool = false,
     observation_failed: bool = false,
@@ -1504,6 +1544,7 @@ const ResourceGroup = struct {
         id: u32,
         limits: ?protocol.ExecResourceLimits,
         deny_descendants: bool,
+        deny_fork: bool,
     ) !ResourceGroup {
         try requireControlFile("/sys/fs/cgroup/cgroup.controllers");
         try writeControlFile(
@@ -1542,6 +1583,7 @@ const ResourceGroup = struct {
             .path = group_path,
             .limits = limits,
             .deny_descendants = deny_descendants,
+            .deny_fork = deny_fork,
         };
     }
 
@@ -1630,6 +1672,15 @@ const ResourceGroup = struct {
 
         // Collect after draining: final usage may exceed the last running sample.
         _ = self.pollExhaustion();
+        if (self.deny_fork) {
+            if (self.wait4_cpu_usec) |waited| {
+                if (self.last_sample) |value| {
+                    if (value.cpu_usec) |cgroup| {
+                        if (!resource_observation.cpuAgrees(cgroup, waited)) self.observation_failed = true;
+                    } else self.observation_failed = true;
+                } else self.observation_failed = true;
+            } else self.observation_failed = true;
+        }
         const sample = if (self.observation_failed) null else self.last_sample;
         const group_path_z = std.heap.page_allocator.dupeZ(u8, self.path) catch null;
         var removed = false;
@@ -1776,9 +1827,13 @@ fn applyNamespaceIsolation(isolate_ipc: bool, isolate_devices: bool) !void {
     }
 }
 
-/// Install inherited Linux Landlock execute and exact-write allow-lists.
-fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []const []const u8) !void {
-    if (executables.len == 0 and writable_paths.len == 0) return;
+/// Install inherited Linux Landlock execute, exact-file, and regular-file tree allow-lists.
+fn applyCapabilityPolicy(
+    executables: []const []const u8,
+    writable_paths: []const []const u8,
+    writable_trees: []const []const u8,
+) !void {
+    if (executables.len == 0 and writable_paths.len == 0 and writable_trees.len == 0) return;
 
     if (executables.len > 0) {
         try makeRootTreeNoExec();
@@ -1786,10 +1841,8 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
     }
 
     var ruleset_attr: c.struct_landlock_ruleset_attr = std.mem.zeroes(c.struct_landlock_ruleset_attr);
-    // Scoped invocations expose only pre-created exact writable files.  Handle
-    // every namespace-mutating right as well as writes/truncation so an
-    // invocation cannot create unaccounted state in guest tmpfs mounts such as
-    // /tmp, /run, /root, or cache directories.
+    // Exact-file writes remain pre-created paths. Tree writes add MAKE_REG and
+    // REMOVE_FILE under admitted directories, never mkdir, symlink, or REFER.
     ruleset_attr.scoped = c.LANDLOCK_SCOPE_SIGNAL | c.LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET;
     ruleset_attr.handled_access_fs = c.LANDLOCK_ACCESS_FS_EXECUTE |
         c.LANDLOCK_ACCESS_FS_WRITE_FILE |
@@ -1887,6 +1940,34 @@ fn applyCapabilityPolicy(executables: []const []const u8, writable_paths: []cons
         var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
         path_attr.allowed_access = c.LANDLOCK_ACCESS_FS_WRITE_FILE | c.LANDLOCK_ACCESS_FS_TRUNCATE;
         path_attr.parent_fd = writable_fd;
+        if (c.syscall(
+            c.SYS_landlock_add_rule,
+            ruleset_fd,
+            c.LANDLOCK_RULE_PATH_BENEATH,
+            &path_attr,
+            @as(c_uint, 0),
+        ) < 0) return error.LandlockRuleFailed;
+    }
+
+    for (writable_trees) |tree_path| {
+        const tree_z = try std.heap.page_allocator.dupeZ(u8, tree_path);
+        defer std.heap.page_allocator.free(tree_z);
+
+        var resolved: [c.PATH_MAX]u8 = undefined;
+        const resolved_ptr = c.realpath(tree_z.ptr, &resolved) orelse return error.InvalidWritablePath;
+        const resolved_path = std.mem.span(resolved_ptr);
+        if (!std.mem.eql(u8, tree_path, resolved_path)) return error.AliasedWritablePath;
+
+        const tree_fd = c.open(tree_z.ptr, c.O_PATH | c.O_DIRECTORY | c.O_CLOEXEC);
+        if (tree_fd < 0) return error.InvalidWritablePath;
+        defer _ = c.close(tree_fd);
+
+        var path_attr: c.struct_landlock_path_beneath_attr = std.mem.zeroes(c.struct_landlock_path_beneath_attr);
+        path_attr.allowed_access = c.LANDLOCK_ACCESS_FS_WRITE_FILE |
+            c.LANDLOCK_ACCESS_FS_TRUNCATE |
+            c.LANDLOCK_ACCESS_FS_MAKE_REG |
+            c.LANDLOCK_ACCESS_FS_REMOVE_FILE;
+        path_attr.parent_fd = tree_fd;
         if (c.syscall(
             c.SYS_landlock_add_rule,
             ruleset_fd,

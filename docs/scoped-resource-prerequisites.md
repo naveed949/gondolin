@@ -87,5 +87,6 @@ Guest tests cover strict parsing, counter regression, real control-file read los
 and recovery, and truncated input. Host tests cover null usage, observation loss
 racing a successful exit, retained exhaustion, signed contradictory evidence and
 old-image admission refusal. These tests do not independently qualify a runtime.
-QEMU CPU accounting remains QEMU accounting, and the proposed
-[scoped tree/payload profile](scoped-tree-payload-profile.md) is not enabled.
+QEMU CPU accounting remains QEMU accounting. The [scoped tree/payload profile](scoped-tree-payload-profile.md)
+is implemented as `scoped-tree-runner/v1` source; AdaptiveSandbox admission and
+qualification remain pending.

@@ -112,6 +112,23 @@ export {
   type CanonicalScopedRunnerRequest,
 } from "./scoped-runner.ts";
 export {
+  SCOPED_TREE_REQUEST_SCHEMA_VERSION,
+  SCOPED_TREE_CEILING_SCHEMA_VERSION,
+  SCOPED_TREE_EVIDENCE_SCHEMA_VERSION,
+  SCOPED_TREE_PROFILE,
+  SCOPED_TREE_GUEST_PATHS,
+  SCOPED_TREE_POLICY_VERSIONS,
+  ScopedTreeInvocationContext,
+  canonicalizeScopedTreeInvocationRequest,
+  normalizeScopedTreeCeiling,
+  verifyScopedTreeInvocationResult,
+  type ScopedTreeInvocationRequest,
+  type ScopedTreeInvocationCeiling,
+  type ScopedTreeInvocationResult,
+  type ScopedTreeInvocationEvidence,
+  type ScopedTreeInvocationRuntimeOptions,
+} from "./scoped-tree-invocation.ts";
+export {
   ADAPTIVESANDBOX_PIN_SCHEMA_VERSION,
   ADAPTIVESANDBOX_MATRIX_SCHEMA_VERSION,
   ADAPTIVESANDBOX_REPORT_SCHEMA_VERSION,

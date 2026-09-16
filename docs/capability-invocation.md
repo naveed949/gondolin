@@ -713,6 +713,25 @@ See [scoped resource prerequisites](scoped-resource-prerequisites.md) for CPU
 observer failure semantics and the remaining tree-authority, resource, and
 independent teardown gaps before AdaptiveSandbox qualification.
 
+## Scoped-tree runner v1
+
+`ScopedTreeInvocationContext` is a separate one-use controller with request
+schema `gondolin.scoped-tree-request/v1` and signed
+`gondolin.scoped-tree-evidence/v1` evidence. The public request selects only a
+controller-registered `{ target }`. Gondolin receives the registered executable
+digest and argument vector, one live repository read root, and two fresh private
+cache/temp write roots. It does not accept commands, shell strings, environment
+projection, hooks, or extra authority from the payload.
+
+Filesystem operations follow the reviewed tree table: repository reads stay
+root-bound; private roots allow late-created regular files, same-directory
+rename/link, and deny mkdir, symlink, and cross-directory moves. Payload CPU
+and memory are guest-cgroup observations, with wait4 CPU cross-checked at 5 ms
+when fork is denied. The PID cgroup ceiling is `children + 1`; fork remains
+prohibited. This is implemented source, not AdaptiveSandbox admission or a
+qualified compatibility row. See
+[scoped tree and payload resource profile](scoped-tree-payload-profile.md).
+
 ## Experimental credential-free HTTPS profile
 
 `HttpsInvocationContext` is a separate one-use controller with request schema

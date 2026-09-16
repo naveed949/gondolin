@@ -180,6 +180,20 @@ test("virtio-protocol: buildExecRequest preserves descendant denial", () => {
   });
 });
 
+test("virtio-protocol: buildExecRequest preserves tree writes and fork denial", () => {
+  const req = buildExecRequest(9, {
+    cmd: "/opt/gondolin/malicious-runner",
+    allowed_writable_trees: ["/data/cache", "/data/tmp"],
+    deny_fork: true,
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/opt/gondolin/malicious-runner",
+    allowed_writable_trees: ["/data/cache", "/data/tmp"],
+    deny_fork: true,
+  });
+});
+
 test("virtio-protocol: buildStdinData and buildPtyResize shape", () => {
   const stdin = buildStdinData(1, Buffer.from("hi"));
   assert.deepEqual(stdin, {

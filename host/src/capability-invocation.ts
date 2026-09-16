@@ -105,7 +105,13 @@ export type ExactReaderGuarantee =
   | (typeof DESTINATION_BOUND_CREDENTIAL_GUARANTEES)[number];
 
 export type CapabilityHttpMethod =
-  "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
+  | "GET"
+  | "HEAD"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "OPTIONS";
 
 export type CapabilityNetworkRule = {
   /** Content-aware transport, where `tls` means HTTP/1.x over TLS */
@@ -446,7 +452,8 @@ export type ExactWriterInvocationRequest = {
 
 export type CapabilityCeiling = ExactReaderCeiling | ExactWriterCeiling;
 export type CapabilityInvocationRequest =
-  ExactReaderInvocationRequest | ExactWriterInvocationRequest;
+  | ExactReaderInvocationRequest
+  | ExactWriterInvocationRequest;
 
 export type CapabilityInvocationRuntimeOptions = {
   /** QEMU executable path */
@@ -472,7 +479,11 @@ export type CapabilityInvocationRuntimeOptions = {
 };
 
 export type CapabilityEffectDecision =
-  "requested" | "granted" | "attempted" | "denied" | "observed";
+  | "requested"
+  | "granted"
+  | "attempted"
+  | "denied"
+  | "observed";
 
 export type CapabilityFilesystemEffect = AuthenticatedEvidenceEvent & {
   /** Capability domain */
@@ -544,7 +555,12 @@ export type CapabilityCredentialEffect = AuthenticatedEvidenceEvent & {
   method?: string;
   /** Non-sensitive denial classification */
   reason?:
-    "missing" | "expired" | "revoked" | "mismatch" | "stale" | "inactive";
+    | "missing"
+    | "expired"
+    | "revoked"
+    | "mismatch"
+    | "stale"
+    | "inactive";
   /** Relationship of this event to enforcement */
   decision: CapabilityEffectDecision;
 };
@@ -725,11 +741,13 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
   requestSchemas: {
     [CAPABILITY_INVOCATION_SCHEMA_VERSION]: "active",
     "gondolin.https-request/v1": "active",
+    "gondolin.scoped-tree-request/v1": "active",
     "future-schema": "unsupported",
   },
   evidenceSchemas: {
     [CAPABILITY_EVIDENCE_SCHEMA_VERSION]: "active",
     "gondolin.https-evidence/v1": "active",
+    "gondolin.scoped-tree-evidence/v1": "active",
     "gondolin.capability-evidence/v1": "unsupported",
     "gondolin.capability-evidence/v2": "unsupported",
     "future-schema": "unsupported",
@@ -740,6 +758,7 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "exact-reader.http-tls-credentials": "active",
     "exact-writer": "active",
     "scoped-runner": "active",
+    "scoped-tree-runner/v1": "active",
     writer: "unsupported",
     runner: "unsupported",
   },
@@ -789,8 +808,15 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
   },
   operations: {
     "filesystem.read.exact": "active",
+    "filesystem.read.tree": "active",
     "filesystem.write.ephemeral-exact": "active",
+    "filesystem.write.tree.regular-file": "active",
     "filesystem.truncate.ephemeral-exact": "active",
+    "filesystem.truncate.tree.regular-file": "active",
+    "filesystem.create.tree.regular-file": "active",
+    "filesystem.unlink.tree.regular-file": "active",
+    "filesystem.rename.tree.same-directory": "active",
+    "filesystem.link.tree.same-directory": "active",
     "filesystem.write": "unsupported",
     "filesystem.create": "unsupported",
     "filesystem.truncate": "unsupported",
@@ -833,6 +859,7 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "process.direct-executable": "active",
     "process.descendant-allow-list": "active",
     "process.descendants-denied": "active",
+    "process.fork-denied": "active",
     "resource.cpu-time": "unverified",
     "resource.memory": "unverified",
     "resource.pids": "unverified",

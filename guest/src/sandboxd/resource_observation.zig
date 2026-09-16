@@ -3,6 +3,14 @@ const std = @import("std");
 
 pub const ObservationError = error{ InvalidCounter, CounterRegression };
 
+pub const cpu_allowance_usec: u64 = 5_000;
+
+pub fn cpuAgrees(cgroup_usec: u64, wait4_usec: u64) bool {
+    const hi = @max(cgroup_usec, wait4_usec);
+    const lo = @min(cgroup_usec, wait4_usec);
+    return hi - lo <= cpu_allowance_usec;
+}
+
 pub fn integer(contents: []const u8) ObservationError!u64 {
     const value = std.mem.trim(u8, contents, " \r\n\t");
     if (value.len == 0) return error.InvalidCounter;
@@ -59,6 +67,12 @@ test "missing, malformed, duplicate and overflowing counters are unavailable" {
     for ([_][]const u8{ "", "-1", "+0", "1_000", "1 2", "18446744073709551616" }) |bad| {
         try std.testing.expectError(error.InvalidCounter, integer(bad));
     }
+}
+
+test "cgroup and wait4 CPU must agree within 5 ms" {
+    try std.testing.expect(cpuAgrees(1_000, 5_999));
+    try std.testing.expect(cpuAgrees(8_000, 3_000));
+    try std.testing.expect(!cpuAgrees(0, 5_001));
 }
 
 test "any accounting counter regression rejects the observation" {

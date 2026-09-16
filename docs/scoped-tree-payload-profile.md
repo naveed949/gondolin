@@ -1,7 +1,8 @@
 # Scoped tree and payload resource profile
 
-Status: design reviewed against the native contract; implementation and
-qualification pending. No active runtime feature is advertised.
+Status: source implementation of `scoped-tree-runner/v1` is present; AdaptiveSandbox
+admission, consumer pins, and qualification remain pending. Do not treat this
+profile as a qualified runtime row.
 Tracking: [AdaptiveSandbox #39](https://github.com/naveed949/AdaptiveSandbox/issues/39)
 and [Gondolin #23](https://github.com/naveed949/gondolin/issues/23).
 The reference is AdaptiveSandbox's `docs/scoped-runner-native-contract.md` at
@@ -14,6 +15,8 @@ Introduce a distinct `scoped-tree-runner/v1` profile. Preserve the existing
 be negotiated against the exact package, image, enforcement policy and observer
 versions. A manifest may advertise the new profile only after its implementation
 and runtime tests pass. A source design or parser is not an active guarantee.
+This source tree advertises `scoped-tree-runner/v1` as implemented. Qualified
+allowlists, consumer pins, and positive AdaptiveSandbox admission remain unchanged.
 
 AdaptiveSandbox alone selects a registered target from the public `{ target }`
 argument and compiles effective canonical authority. Gondolin receives the
