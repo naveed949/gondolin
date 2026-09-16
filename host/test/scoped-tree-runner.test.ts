@@ -219,10 +219,40 @@ test("exec protocol carries tree roots, empty-env, and payload pids = children+1
   ]);
 });
 
-test("feature manifest does not advertise scoped-tree-runner before runtime evidence", () => {
+test("feature manifest defers scoped-tree-runner advertise until it is earned", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
-  assert.equal(manifest.profiles["scoped-tree-runner"], undefined);
+  assert.equal(manifest.profiles["scoped-tree-runner"], "unsupported");
   assert.equal(manifest.profiles["scoped-runner"], "active");
+  for (const guarantee of [
+    "root-bound-repository-read",
+    "private-write-roots",
+    "no-fork",
+    "payload-cpu",
+    "payload-memory",
+    "payload-children",
+  ]) {
+    assert.notEqual(manifest.guarantees[guarantee], "active", guarantee);
+  }
+  assert.notEqual(manifest.domains["environment.scoped-tree-runner"], "active");
+  assert.notEqual(manifest.operations["filesystem.read.tree"], "active");
+  assert.notEqual(
+    manifest.operations["filesystem.write.private-regular"],
+    "active",
+  );
+  assert.notEqual(
+    manifest.operations["filesystem.create.private-regular"],
+    "active",
+  );
+  assert.notEqual(manifest.operations["process.no-fork"], "active");
+  assert.equal(manifest.guarantees["per-invocation-cpu"], "unverified");
+  assert.equal(manifest.guarantees["per-invocation-memory"], "unverified");
+  assert.equal(manifest.guarantees["per-invocation-pids"], "unverified");
+  assert.equal(
+    manifest.qualifications[
+      "scoped-tree-runner.resources/qemu/linux/released-image-kernel-arch-bundle"
+    ],
+    undefined,
+  );
 });
 
 test("private-root destruction is observed independently of vm.close", () => {
