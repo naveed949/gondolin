@@ -249,11 +249,12 @@ export class ScopedTreeProvider
           : "read";
     this.authorize(located, kind, vfsPath);
     const numeric = flagsToNumber(flags);
+    const creat = (numeric & fs.constants.O_CREAT) !== 0;
     const fd = openat2(
       located.root.fd,
       located.relative,
       numeric | linuxOpenFlag("O_CLOEXEC", O_CLOEXEC) | linuxOpenFlag("O_NOCTTY", O_NOCTTY),
-      mode ?? 0o600,
+      creat ? (mode ?? 0o600) : 0,
     );
     let adopted = false;
     try {

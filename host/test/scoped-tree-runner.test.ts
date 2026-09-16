@@ -141,9 +141,9 @@ test("children zero is valid and does not permit fork", () => {
 
 test("wait4 CPU cross-check uses the native 5 ms allowance", () => {
   assert.equal(SCOPED_TREE_CPU_WAIT4_ALLOWANCE_USEC, 5000);
-  assert.equal(cpuAgreesWithWait4(1000, 0), true);
-  assert.equal(cpuAgreesWithWait4(1000, 6), false);
-  assert.equal(cpuAgreesWithWait4(10000, 15), true);
+  assert.equal(cpuAgreesWithWait4(10_000, 10), true);
+  assert.equal(cpuAgreesWithWait4(10_000, 15), true);
+  assert.equal(cpuAgreesWithWait4(10_000, 16), false);
   assert.equal(cpuAgreesWithWait4(null, 1), false);
   assert.equal(cpuAgreesWithWait4(1000, null), false);
 });
@@ -154,7 +154,7 @@ test("observation loss and contradictory CPU cannot be treated as success", () =
       cpuTimeMs: 1,
       memoryPeakBytes: 4096,
       pidsPeak: 1,
-      exhausted: null,
+      exhausted: "memory",
       observationFailed: true,
       resourceGroupRemoved: true,
       wait4CpuMs: 1,
@@ -162,18 +162,8 @@ test("observation loss and contradictory CPU cannot be treated as success", () =
     }),
     true,
   );
-  assert.equal(
-    cpuAgreesWithWait4(1000, 20) ||
-      __test.validPayloadResourceUsage({
-        cpuTimeMs: null,
-        memoryPeakBytes: null,
-        pidsPeak: null,
-        exhausted: "memory",
-        observationFailed: true,
-        resourceGroupRemoved: false,
-      }) === false,
-    true,
-  );
+  assert.equal(cpuAgreesWithWait4(1000, 20), false);
+  assert.equal(peakChildren(null), null);
   assert.equal(__test.resourceOutcome("pids"), "children_exhausted");
   assert.equal(__test.outcomeToExhausted("children_exhausted"), "children");
 });

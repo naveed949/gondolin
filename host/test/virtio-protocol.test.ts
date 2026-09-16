@@ -199,6 +199,8 @@ test("virtio-protocol: buildExecRequest preserves tree roots and no-fork policy"
     allowed_writable_directories: ["/data/cache", "/data/tmp"],
   });
 });
+
+test("virtio-protocol: buildStdinData and buildPtyResize shape", () => {
   const stdin = buildStdinData(1, Buffer.from("hi"));
   assert.deepEqual(stdin, {
     v: 1,

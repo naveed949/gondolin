@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -174,7 +175,7 @@ test(
     const roots = makeRoots();
     try {
       fs.rmSync(roots.cache.hostPath, { recursive: true, force: true });
-      fs.mkdirSync(roots.cache.hostPath);
+      fs.writeFileSync(roots.cache.hostPath, "not-a-directory");
       assert.throws(
         () => providerFrom(roots),
         (error: unknown) =>
