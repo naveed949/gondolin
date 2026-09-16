@@ -143,6 +143,14 @@ test(
         "after-admission",
       );
 
+      const fuseMode = provider.openSync("/cache/fuse-mode.bin", "w", 0o100644);
+      fuseMode.writeFileSync("fuse-create-mode");
+      fuseMode.closeSync();
+      assert.equal(
+        fs.readFileSync(path.join(roots.cache.hostPath, "fuse-mode.bin"), "utf8"),
+        "fuse-create-mode",
+      );
+
       const renamed = provider.openSync("/cache/late-created.bin", "r");
       renamed.closeSync();
       provider.renameSync("/cache/late-created.bin", "/cache/renamed.bin");

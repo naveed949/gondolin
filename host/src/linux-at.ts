@@ -99,7 +99,8 @@ function checked(
 function openHow(flags: number, mode: number, resolve: number): Buffer {
   const how = Buffer.alloc(24);
   how.writeBigUInt64LE(BigInt(flags >>> 0), 0);
-  how.writeBigUInt64LE(BigInt(mode >>> 0), 8);
+  // FUSE CREATE supplies `S_IFREG|mode`; openat2 allows only `07777` permission bits
+  how.writeBigUInt64LE(BigInt((mode & 0o7777) >>> 0), 8);
   how.writeBigUInt64LE(BigInt(resolve >>> 0), 16);
   return how;
 }
