@@ -458,7 +458,7 @@ test("host writable-storage budget aborts before an over-limit write", () => {
 test("feature manifest keeps unqualified resource controls unverified", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
   assert.equal(manifest.profiles["scoped-runner"], "active");
-  assert.equal(manifest.profiles["scoped-tree-runner"], undefined);
+  assert.equal(manifest.profiles["scoped-tree-runner"], "unsupported");
   for (const guarantee of SCOPED_RUNNER_GUARANTEES) {
     assert.equal(manifest.guarantees[guarantee], "active", guarantee);
   }

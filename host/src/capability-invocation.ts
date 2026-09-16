@@ -740,6 +740,7 @@ const FEATURE_MANIFEST: CapabilityInvocationFeatureManifest = deepFreeze({
     "exact-reader.http-tls-credentials": "active",
     "exact-writer": "active",
     "scoped-runner": "active",
+    "scoped-tree-runner": "unsupported",
     writer: "unsupported",
     runner: "unsupported",
   },
