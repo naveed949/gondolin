@@ -58,6 +58,14 @@ export type ExecCommandMessage = {
   isolate_ipc?: boolean;
   /** empty device and ambient-socket mounts required before process launch */
   isolate_devices?: boolean;
+  /** Overlay `/proc` together with device isolation; keep procfs when false */
+  isolate_proc?: boolean;
+  /** Deny clone/fork/vfork after the entrypoint image is executing */
+  deny_fork?: boolean;
+  /** Repository-style read directory trees for Landlock */
+  allowed_readable_directories?: string[];
+  /** Private write directory trees for Landlock */
+  allowed_writable_directories?: string[];
   /** working directory */
   cwd?: string;
   /** whether stdin messages will be sent */

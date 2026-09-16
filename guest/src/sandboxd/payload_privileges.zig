@@ -106,20 +106,7 @@ fn checked(result: usize) !void {
 
 /// Irreversible payload-only ceiling; any failure must abort the pending exec
 pub fn drop() !void {
-    try checked(linux.prctl(pr_set_no_new_privs, 1, 0, 0, 0));
-    try checked(linux.prctl(pr_set_securebits, securebits, 0, 0, 0));
-    try checked(linux.prctl(pr_cap_ambient, pr_cap_ambient_clear_all, 0, 0, 0));
-    // Query the kernel rather than assuming its highest capability number.
-    var capability: usize = 0;
-    while (capability < 64) : (capability += 1) {
-        const present = linux.prctl(pr_capbset_read, capability, 0, 0, 0);
-        if (linux.errno(present) == .INVAL) break;
-        try checked(present);
-        if (present != 0) try checked(linux.prctl(pr_capbset_drop, capability, 0, 0, 0));
-    }
-    var header: CapHeader = .{};
-    const data = [_]CapData{ .{}, .{} };
-    try checked(linux.syscall2(.capset, @intFromPtr(&header), @intFromPtr(&data)));
+    try dropWithoutFilter();
     try installFilter();
 }
 
@@ -242,4 +229,92 @@ test "seccomp rejects alternate ABIs and every namespace clone flag" {
     inline for (.{ "read", "write", "execve", "wait4", "mmap", "mprotect", "futex" }) |name| {
         try std.testing.expectEqual(ret_allow, verdict(audit_arch, @intFromEnum(@field(linux.SYS, name)), 0));
     }
+}
+
+fn noForkVerdict(arch: u32, syscall: u32) u32 {
+    var accumulator: u32 = 0;
+    var pc: usize = 0;
+    while (pc < no_fork_filters.len) {
+        const instruction = no_fork_filters[pc];
+        pc += 1;
+        switch (instruction.code) {
+            0x20 => accumulator = switch (instruction.k) {
+                0 => syscall,
+                4 => arch,
+                else => unreachable,
+            },
+            0x15 => pc += if (accumulator == instruction.k) instruction.jt else instruction.jf,
+            0x45 => pc += if (accumulator & instruction.k != 0) instruction.jt else instruction.jf,
+            0x06 => return instruction.k,
+            else => unreachable,
+        }
+    }
+    unreachable;
+}
+
+test "no-fork seccomp denies clone and fork but still allows the initial execve" {
+    try std.testing.expectEqual(ret_eperm, noForkVerdict(audit_arch, @intFromEnum(linux.SYS.clone)));
+    try std.testing.expectEqual(ret_eperm, noForkVerdict(audit_arch, @intFromEnum(linux.SYS.clone3)));
+    try std.testing.expectEqual(ret_allow, noForkVerdict(audit_arch, @intFromEnum(linux.SYS.execve)));
+    try std.testing.expectEqual(ret_allow, noForkVerdict(audit_arch, @intFromEnum(linux.SYS.read)));
+}
+
+const no_fork_filters = blk: {
+    @setEvalBranchQuota(10000);
+    var out: [256]Filter = undefined;
+    var n: usize = 0;
+    out[n] = .{ .code = 0x20, .k = 4 };
+    n += 1;
+    out[n] = .{ .code = 0x15, .jt = 1, .k = audit_arch };
+    n += 1;
+    out[n] = .{ .code = 0x06, .k = ret_kill_process };
+    n += 1;
+    out[n] = .{ .code = 0x20, .k = 0 };
+    n += 1;
+    if (builtin.cpu.arch == .x86_64) {
+        out[n] = .{ .code = 0x45, .jf = 1, .k = 0x40000000 };
+        n += 1;
+        out[n] = .{ .code = 0x06, .k = ret_kill_process };
+        n += 1;
+    }
+    const extra = [_][]const u8{ "clone", "clone3", "fork", "vfork" };
+    for (forbidden_syscalls ++ extra) |name| {
+        if (@hasField(linux.SYS, name)) {
+            out[n] = .{ .code = 0x15, .jf = 1, .k = @intFromEnum(@field(linux.SYS, name)) };
+            n += 1;
+            out[n] = .{ .code = 0x06, .k = ret_eperm };
+            n += 1;
+        }
+    }
+    out[n] = .{ .code = 0x06, .k = ret_allow };
+    n += 1;
+    break :blk out[0..n].*;
+};
+
+fn installNoForkFilter() !void {
+    try checked(linux.prctl(pr_set_no_new_privs, 1, 0, 0, 0));
+    const program: Program = .{ .len = no_fork_filters.len, .filter = &no_fork_filters };
+    try checked(linux.syscall3(.seccomp, linux.SECCOMP.SET_MODE_FILTER, 0, @intFromPtr(&program)));
+}
+
+/// Irreversible payload ceiling that also prohibits later fork/clone
+pub fn dropNoFork() !void {
+    try dropWithoutFilter();
+    try installNoForkFilter();
+}
+
+fn dropWithoutFilter() !void {
+    try checked(linux.prctl(pr_set_no_new_privs, 1, 0, 0, 0));
+    try checked(linux.prctl(pr_set_securebits, securebits, 0, 0, 0));
+    try checked(linux.prctl(pr_cap_ambient, pr_cap_ambient_clear_all, 0, 0, 0));
+    var capability: usize = 0;
+    while (capability < 64) : (capability += 1) {
+        const present = linux.prctl(pr_capbset_read, capability, 0, 0, 0);
+        if (linux.errno(present) == .INVAL) break;
+        try checked(present);
+        if (present != 0) try checked(linux.prctl(pr_capbset_drop, capability, 0, 0, 0));
+    }
+    var header: CapHeader = .{};
+    const data = [_]CapData{ .{}, .{} };
+    try checked(linux.syscall2(.capset, @intFromPtr(&header), @intFromPtr(&data)));
 }

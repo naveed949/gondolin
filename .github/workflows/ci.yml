@@ -99,6 +99,9 @@ jobs:
       - name: Verify descendant-denial feature marker
         run: grep -aFq 'gondolin-feature:exec.descendants-denied/v1' guest/zig-out/bin/sandboxd
 
+      - name: Verify scoped-tree-runner feature marker
+        run: grep -aFq 'gondolin-feature:exec.scoped-tree-runner/v1' guest/zig-out/bin/sandboxd
+
       - name: Build guest image
         run: |
           NODE_BIN="$(node -p 'process.execPath')"
@@ -156,6 +159,9 @@ jobs:
 
       - name: Verify descendant-denial feature marker
         run: grep -aFq 'gondolin-feature:exec.descendants-denied/v1' guest/zig-out/bin/sandboxd
+
+      - name: Verify scoped-tree-runner feature marker
+        run: grep -aFq 'gondolin-feature:exec.scoped-tree-runner/v1' guest/zig-out/bin/sandboxd
 
       - name: Verify Docker is available
         run: docker info

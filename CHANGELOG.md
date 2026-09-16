@@ -8,9 +8,12 @@ All notable changes to Gondolin are documented here.
   `scoped-tree-runner/v1` profile: pin repository/cache/temp directory identities,
   resolve paths with `openat2` beneath the admitted descriptor, and enforce the
   accepted repository/private operation table. The profile remains unsupported
-  and is not advertised. Payload launch, guest ambient confinement, and
-  payload-only resource accounting remain unimplemented; no qualification or
-  compatibility-row changes.
+  and is not advertised.
+- Implement the versioned `scoped-tree-runner/v1` runtime: live root-bound
+  openat2 VFS, private cache/temp roots with retained identities, no-fork
+  payload confinement, and payload-subtree cgroup/wait4 resource accounting.
+  The public feature manifest does not advertise the profile yet; AdaptiveSandbox
+  admission, consumer pins, and qualified matrix rows remain out of scope.
 
 ## 0.12.1-adaptivesandbox.8
 
