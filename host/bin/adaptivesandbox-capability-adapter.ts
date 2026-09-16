@@ -102,6 +102,14 @@ async function invoke(request: AdapterRequest): Promise<unknown> {
   const principalId = requireString(request.principalId, "principal id");
   const ceiling = requireObject(request.ceiling, "capability ceiling");
   const invocation = requireObject(request.request, "capability request");
+  if (
+    ceiling.profile === "scoped-tree-runner" ||
+    invocation.profile === "scoped-tree-runner"
+  ) {
+    throw new Error(
+      "request.launch: scoped-tree-runner payload launch is unsupported; live-root enforcement is not an active Capability Invocation profile",
+    );
+  }
   const context =
     ceiling.profile === "scoped-runner"
       ? ScopedRunnerInvocationContext.create(ceiling)

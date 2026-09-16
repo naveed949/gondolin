@@ -16,6 +16,11 @@ function makeHostPackage(root: string): string {
     path.join(pkgRoot, "src", "vfs", "node", "vendored-node-vfs", "stub.txt"),
     "vendored",
   );
+  fs.mkdirSync(path.join(pkgRoot, "src", "native"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pkgRoot, "src", "native", "scoped-tree-linux.c"),
+    "/* stub */\n",
+  );
   fs.mkdirSync(path.join(pkgRoot, "dist", "src"), { recursive: true });
   fs.writeFileSync(
     path.join(pkgRoot, "dist", "src", "index.d.ts"),
@@ -69,6 +74,11 @@ test("postbuild: finds guest sources via GONDOLIN_GUEST_SRC", () => {
           "vendored-node-vfs",
           "stub.txt",
         ),
+      ),
+    );
+    assert.ok(
+      fs.existsSync(
+        path.join(pkgRoot, "dist", "src", "native", "scoped-tree-linux.c"),
       ),
     );
     assert.equal(
