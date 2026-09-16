@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -184,7 +185,18 @@ test("scoped-tree admission rejects omitted domains, callbacks, and adapter wide
             process: { descendants: "deny", afterFork: () => undefined },
           },
         }),
-      /unknown critical field\(s\): afterFork/,
+      /request\.capabilities\.process\.afterFork: callbacks are not capability data/,
+    );
+    assert.throws(
+      () =>
+        canonicalizeScopedTreeRunnerInvocationRequest({
+          ...requestFor(tree),
+          capabilities: {
+            ...requestFor(tree).capabilities,
+            process: { descendants: "deny", extra: "widen" },
+          },
+        }),
+      /unknown critical field\(s\): extra/,
     );
   } finally {
     fs.rmSync(tree.root, { recursive: true, force: true });
@@ -441,7 +453,7 @@ test(
         /filesystem\.live-root\.handle/,
       );
       session.temp.closeHandle(reopened);
-      fs.mkfifoSync(path.join(tree.cache, "fifo"));
+      execFileSync("mkfifo", [path.join(tree.cache, "fifo")]);
       assert.throws(
         () => session.cache.lookup("fifo"),
         (error: unknown) =>
