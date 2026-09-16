@@ -101,150 +101,145 @@ function request(
   };
 }
 
-test(
-  "scoped-tree-runner/v1 enforces live roots, empty ambient state, and payload resources",
-  { skip: shouldSkipVmTests(), timeout: 120_000 },
-  async (t) => {
-    const context = ScopedTreeRunnerInvocationContext.create(ceiling());
+const skipVm = shouldSkipVmTests();
+const context = ScopedTreeRunnerInvocationContext.create(ceiling());
 
-    await t.test("reads the live repository tree", async () => {
-      const result = await context.invoke(
-        request("tree-read", ["cat", "/data/repo/source.ts"]),
-      );
-      assert.equal(result.outcome, "success", result.error);
-      assert.equal(result.stdout, "export const answer = 42;\n");
-      assert.equal(result.resourceAccounting.observations.cpu, "payload-cgroup-wait4");
-      assert.equal(result.resourceAccounting.usage.children, 0);
-      assert.equal(result.evidence.policyVersions.admission, "scoped-tree-runner/v1");
-      assert.equal(result.evidence.policyVersions.resources, "payload-cgroup-wait4/v1");
-      assert.equal(result.evidence.teardown.completedAt, result.evidence.settledAt);
-      assert.equal(result.evidence.teardown.privateRootsDestroyed, true);
-      assert.equal(result.evidence.teardown.vfsHandlesRevoked, true);
-      assert.equal(result.evidence.teardown.vmStopped, true);
-    });
+function vmTest(name: string, fn: () => Promise<void>) {
+  test(name, { skip: skipVm, timeout: 60_000 }, fn);
+}
 
-    await t.test("late-creates a regular file under the private cache root", async () => {
-      const result = await context.invoke(
-        request("tree-late-create", [
-          "dd",
-          "if=/data/repo/source.ts",
-          "of=/data/cache/late.txt",
-        ]),
-      );
-      assert.equal(
-        result.outcome,
-        "success",
-        result.error ?? result.stderr,
-      );
-    });
+vmTest("scoped-tree-runner/v1 reads the live repository tree", async () => {
+  const result = await context.invoke(
+    request("tree-read", ["cat", "/data/repo/source.ts"]),
+  );
+  assert.equal(result.outcome, "success", result.error);
+  assert.equal(result.stdout, "export const answer = 42;\n");
+  assert.equal(result.resourceAccounting.observations.cpu, "payload-cgroup-wait4");
+  assert.equal(result.resourceAccounting.usage.children, 0);
+  assert.equal(result.evidence.policyVersions.admission, "scoped-tree-runner/v1");
+  assert.equal(result.evidence.policyVersions.resources, "payload-cgroup-wait4/v1");
+  assert.equal(result.evidence.teardown.completedAt, result.evidence.settledAt);
+  assert.equal(result.evidence.teardown.privateRootsDestroyed, true);
+  assert.equal(result.evidence.teardown.vfsHandlesRevoked, true);
+  assert.equal(result.evidence.teardown.vmStopped, true);
+});
 
-    await t.test("environment is empty under the seeded credential challenge", async () => {
-      const result = await context.invoke(request("tree-empty-env", ["env"]));
-      assert.equal(result.outcome, "success", result.error);
-      assert.equal(result.stdout.trim(), "");
-      assert.doesNotMatch(result.stdout, /GONDOLIN_SCOPED_TREE_CHALLENGE/);
-      assert.doesNotMatch(result.stdout, /seeded-credential/);
-    });
+vmTest("scoped-tree-runner/v1 late-creates a regular file under the private cache root", async () => {
+  const result = await context.invoke(
+    request("tree-late-create", [
+      "dd",
+      "if=/data/repo/source.ts",
+      "of=/data/cache/late.txt",
+    ]),
+  );
+  assert.equal(result.outcome, "success", result.error ?? result.stderr);
+});
 
-    await t.test("only standard streams survive launch", async () => {
-      const result = await context.invoke(
-        request("tree-fds", ["ls", "/proc/self/fd"]),
-      );
-      assert.equal(result.outcome, "success", result.error);
-      const fds = result.stdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => /^\d+$/.test(line))
-        .map(Number);
-      assert.ok(fds.includes(0) && fds.includes(1) && fds.includes(2));
-      assert.equal(
-        fds.some((fd) => fd >= 10),
-        false,
-        `unexpected inherited descriptors: ${fds.join(",")}`,
-      );
-    });
+vmTest("scoped-tree-runner/v1 environment is empty under the seeded credential challenge", async () => {
+  const result = await context.invoke(request("tree-empty-env", ["env"]));
+  assert.equal(result.outcome, "success", result.error);
+  assert.equal(result.stdout.trim(), "");
+  assert.doesNotMatch(result.stdout, /GONDOLIN_SCOPED_TREE_CHALLENGE/);
+  assert.doesNotMatch(result.stdout, /seeded-credential/);
+});
 
-    await t.test("repository writes, mkdir, and symlink are denied", async () => {
-      const write = await context.invoke(
-        request("tree-repo-write", ["touch", "/data/repo/escape.txt"]),
-      );
-      assert.notEqual(write.outcome, "success");
-      assert.equal(fs.existsSync(path.join(repository, "escape.txt")), false);
+vmTest("scoped-tree-runner/v1 only standard streams survive launch", async () => {
+  const result = await context.invoke(
+    request("tree-fds", ["ls", "/proc/self/fd"]),
+  );
+  assert.equal(result.outcome, "success", result.error);
+  const fds = result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+$/.test(line))
+    .map(Number);
+  assert.ok(fds.includes(0) && fds.includes(1) && fds.includes(2));
+  assert.equal(
+    fds.some((fd) => fd >= 10),
+    false,
+    `unexpected inherited descriptors: ${fds.join(",")}`,
+  );
+});
 
-      const mkdir = await context.invoke(
-        request("tree-mkdir", ["mkdir", "/data/cache/dir"]),
-      );
-      assert.notEqual(mkdir.outcome, "success");
+vmTest("scoped-tree-runner/v1 repository writes, mkdir, and symlink are denied", async () => {
+  const write = await context.invoke(
+    request("tree-repo-write", ["touch", "/data/repo/escape.txt"]),
+  );
+  assert.notEqual(write.outcome, "success");
+  assert.equal(fs.existsSync(path.join(repository, "escape.txt")), false);
 
-      const symlink = await context.invoke(
-        request("tree-symlink", ["ln", "-s", "x", "/data/tmp/s"]),
-      );
-      assert.notEqual(symlink.outcome, "success");
-    });
+  const mkdir = await context.invoke(
+    request("tree-mkdir", ["mkdir", "/data/cache/dir"]),
+  );
+  assert.notEqual(mkdir.outcome, "success");
 
-    await t.test("fork is denied by the initial profile", async () => {
-      const result = await context.invoke(
-        request("tree-fork-denied", [
-          "sh",
-          "-c",
-          "busybox echo child-ran & wait; printf done",
-        ]),
-      );
-      assert.notEqual(result.outcome, "success");
-      assert.doesNotMatch(result.stdout, /child-ran/);
-    });
+  const symlink = await context.invoke(
+    request("tree-symlink", ["ln", "-s", "x", "/data/tmp/s"]),
+  );
+  assert.notEqual(symlink.outcome, "success");
+});
 
-    await t.test("payload CPU exhaustion is guest cgroup, not QEMU", async () => {
-      const result = await context.invoke(
-        request(
-          "tree-cpu",
-          ["sh", "-c", "while :; do :; done"],
-          freshPrivate(),
-          { cpuMs: 150, wallMs: 10_000 },
-        ),
-      );
-      assert.equal(result.outcome, "cpu_exhausted", result.error);
-      assert.equal(result.resourceAccounting.exhausted, "cpu");
-      assert.equal(result.resourceAccounting.observations.cpu, "payload-cgroup-wait4");
-      assert.ok(result.evidence.resources.usage.setupMs >= 0);
-      assert.ok(result.evidence.resources.usage.teardownMs >= 0);
-    });
+vmTest("scoped-tree-runner/v1 fork is denied by the initial profile", async () => {
+  const result = await context.invoke(
+    request("tree-fork-denied", [
+      "sh",
+      "-c",
+      "busybox echo child-ran & wait; printf done",
+    ]),
+  );
+  assert.notEqual(result.outcome, "success");
+  assert.doesNotMatch(result.stdout, /child-ran/);
+});
 
-    await t.test("byte memory ceiling is enforced without MiB rounding", async () => {
-      const result = await context.invoke(
-        request(
-          "tree-memory",
-          ["sh", "-c", "x=x; while :; do x=$x$x; done"],
-          freshPrivate(),
-          {
-            memoryBytes: 4 * 1024 * 1024 + 111,
-            cpuMs: 30_000,
-            wallMs: 30_000,
-            children: 0,
-          },
-        ),
-      );
-      assert.equal(result.outcome, "memory_exhausted", result.error);
-      assert.equal(result.resourceAccounting.exhausted, "memory");
-      assert.equal(result.resourceAccounting.limits.memoryBytes, 4 * 1024 * 1024 + 111);
-    });
+vmTest("scoped-tree-runner/v1 payload CPU exhaustion is guest cgroup, not QEMU", async () => {
+  const result = await context.invoke(
+    request(
+      "tree-cpu",
+      ["sh", "-c", "while :; do :; done"],
+      freshPrivate(),
+      { cpuMs: 150, wallMs: 10_000 },
+    ),
+  );
+  assert.equal(result.outcome, "cpu_exhausted", result.error);
+  assert.equal(result.resourceAccounting.exhausted, "cpu");
+  assert.equal(result.resourceAccounting.observations.cpu, "payload-cgroup-wait4");
+  assert.ok(result.evidence.resources.usage.setupMs >= 0);
+  assert.ok(result.evidence.resources.usage.teardownMs >= 0);
+});
 
-    await t.test("concurrent invocations use disjoint private roots", async () => {
-      const firstRoots = freshPrivate();
-      const secondRoots = freshPrivate();
-      const [first, second] = await Promise.all([
-        context.invoke(
-          request("tree-concurrent-a", ["cat", "/data/repo/source.ts"], firstRoots),
-        ),
-        context.invoke(
-          request("tree-concurrent-b", ["cat", "/data/repo/source.ts"], secondRoots),
-        ),
-      ]);
-      assert.equal(first.outcome, "success", first.error);
-      assert.equal(second.outcome, "success", second.error);
-      assert.notEqual(first.evidence.roots.cache, second.evidence.roots.cache);
-      assert.notEqual(first.evidence.roots.temp, second.evidence.roots.temp);
-      assert.notEqual(first.evidence.executionId, second.evidence.executionId);
-    });
-  },
-);
+vmTest("scoped-tree-runner/v1 byte memory ceiling is enforced without MiB rounding", async () => {
+  const result = await context.invoke(
+    request(
+      "tree-memory",
+      ["sh", "-c", "x=x; while :; do x=$x$x; done"],
+      freshPrivate(),
+      {
+        memoryBytes: 4 * 1024 * 1024 + 111,
+        cpuMs: 30_000,
+        wallMs: 30_000,
+        children: 0,
+      },
+    ),
+  );
+  assert.equal(result.outcome, "memory_exhausted", result.error);
+  assert.equal(result.resourceAccounting.exhausted, "memory");
+  assert.equal(result.resourceAccounting.limits.memoryBytes, 4 * 1024 * 1024 + 111);
+});
+
+vmTest("scoped-tree-runner/v1 concurrent invocations use disjoint private roots", async () => {
+  const firstRoots = freshPrivate();
+  const secondRoots = freshPrivate();
+  const [first, second] = await Promise.all([
+    context.invoke(
+      request("tree-concurrent-a", ["cat", "/data/repo/source.ts"], firstRoots),
+    ),
+    context.invoke(
+      request("tree-concurrent-b", ["cat", "/data/repo/source.ts"], secondRoots),
+    ),
+  ]);
+  assert.equal(first.outcome, "success", first.error);
+  assert.equal(second.outcome, "success", second.error);
+  assert.notEqual(first.evidence.roots.cache, second.evidence.roots.cache);
+  assert.notEqual(first.evidence.roots.temp, second.evidence.roots.temp);
+  assert.notEqual(first.evidence.executionId, second.evidence.executionId);
+});
