@@ -42,6 +42,15 @@ export function mergeEnvInputs(
   return envMap.size > 0 ? mapToEnvArray(envMap) : undefined;
 }
 
+/** Merge exec env; `clearEnv` omits VM defaultEnv rather than inheriting it */
+export function mergeExecEnv(
+  defaultEnv: EnvInput | undefined,
+  extraEnv: EnvInput | undefined,
+  clearEnv?: boolean,
+): string[] | undefined {
+  return mergeEnvInputs(clearEnv ? undefined : defaultEnv, extraEnv);
+}
+
 function mergeEnvMap(
   baseEnv?: EnvInput,
   extraEnv?: EnvInput,

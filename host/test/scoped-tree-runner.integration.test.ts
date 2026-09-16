@@ -126,12 +126,16 @@ test(
     await t.test("late-creates a regular file under the private cache root", async () => {
       const result = await context.invoke(
         request("tree-late-create", [
-          "cp",
-          "/data/repo/source.ts",
-          "/data/cache/late.txt",
+          "dd",
+          "if=/data/repo/source.ts",
+          "of=/data/cache/late.txt",
         ]),
       );
-      assert.equal(result.outcome, "success", result.error);
+      assert.equal(
+        result.outcome,
+        "success",
+        result.error ?? result.stderr,
+      );
     });
 
     await t.test("environment is empty under the seeded credential challenge", async () => {

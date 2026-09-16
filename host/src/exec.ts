@@ -146,7 +146,7 @@ export type ExecOptions = {
   encoding?: BufferEncoding;
   /** abort signal */
   signal?: AbortSignal;
-  /** Empty environment selection instead of inherited guest daemon state */
+  /** Empty payload environment; omit VM defaultEnv and guest daemon inheritance */
   clearEnv?: boolean;
   /** exact absolute executable paths permitted for the entrypoint and descendants */
   allowedExecutables?: string[];

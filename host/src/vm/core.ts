@@ -57,6 +57,7 @@ import {
   envInputToEntries,
   mapToEnvArray,
   mergeEnvInputs,
+  mergeExecEnv,
   parseEnvEntry,
   resolveEnvNumber,
 } from "../utils/env.ts";
@@ -1171,7 +1172,11 @@ fi
     try {
       await this.startAutomatically();
 
-      const mergedEnv = mergeEnvInputs(this.defaultEnv, options.env);
+      const mergedEnv = mergeExecEnv(
+        this.defaultEnv,
+        options.env,
+        options.clearEnv,
+      );
 
       const message = {
         type: "exec" as const,
@@ -2328,6 +2333,7 @@ export const __test = {
   composeVfsHooks,
   buildShellEnv,
   mergeEnvInputs,
+  mergeExecEnv,
   envInputToEntries,
   parseEnvEntry,
   mapToEnvArray,
