@@ -148,8 +148,12 @@ export type ExecOptions = {
   allowedExecutables?: string[];
   /** exact absolute files permitted for complete-tree writes and truncation */
   allowedWritablePaths?: string[];
+  /** Absolute directory trees permitted for regular-file create/write/unlink */
+  allowedWritableTrees?: string[];
   /** Additional-process denial within the guest execution group */
   denyDescendants?: boolean;
+  /** Seccomp denial of fork and non-thread clone without changing the PID ceiling */
+  denyFork?: boolean;
   /** fail-closed guest resource controllers installed before launch */
   resourceLimits?: ExecResourceLimits;
   /** isolate the process tree in a private Linux IPC namespace */

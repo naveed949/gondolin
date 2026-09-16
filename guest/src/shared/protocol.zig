@@ -80,8 +80,12 @@ pub const ExecRequest = struct {
     allowed_executables: []const []const u8,
     /// exact writable files permitted for the complete process tree
     allowed_writable_paths: []const []const u8,
+    /// Absolute directory trees permitted for regular-file create/write/unlink
+    allowed_writable_trees: []const []const u8,
     /// additional-process denial within the execution group
     deny_descendants: bool,
+    /// Seccomp denial of fork and non-thread clone without changing the PID ceiling
+    deny_fork: bool,
     /// fail-closed complete-tree resource limits
     resource_limits: ?ExecResourceLimits,
     /// private IPC namespace required before process launch
@@ -860,9 +864,17 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
     const allowed_writable_paths = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_writable_paths"));
     errdefer allocator.free(allowed_writable_paths);
 
+    const allowed_writable_trees = try parseTextArray(allocator, cbor.getMapValue(payload, "allowed_writable_trees"));
+    errdefer allocator.free(allowed_writable_trees);
+
     var deny_descendants = false;
     if (cbor.getMapValue(payload, "deny_descendants")) |deny_descendants_val| {
         deny_descendants = try expectBool(deny_descendants_val);
+    }
+
+    var deny_fork = false;
+    if (cbor.getMapValue(payload, "deny_fork")) |deny_fork_val| {
+        deny_fork = try expectBool(deny_fork_val);
     }
 
     var resource_limits: ?ExecResourceLimits = null;
@@ -928,7 +940,9 @@ fn parseExecRequest(allocator: std.mem.Allocator, root: cbor.Value) !ExecRequest
         .clear_env = clear_env,
         .allowed_executables = allowed_executables,
         .allowed_writable_paths = allowed_writable_paths,
+        .allowed_writable_trees = allowed_writable_trees,
         .deny_descendants = deny_descendants,
+        .deny_fork = deny_fork,
         .resource_limits = resource_limits,
         .isolate_ipc = isolate_ipc,
         .isolate_devices = isolate_devices,

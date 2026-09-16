@@ -131,6 +131,35 @@ pub const WaitPidResult = struct {
     status: u32,
 };
 
+pub const Wait4Result = struct {
+    pid: pid_t,
+    status: u32,
+    /// Combined user and system CPU from rusage in `us`
+    cpu_usec: u64,
+};
+
+fn signedTimevalUsec(seconds: anytype, microseconds: anytype) u64 {
+    const sec_raw = @as(i128, seconds);
+    const usec_raw = @as(i128, microseconds);
+    const sec: u64 = if (sec_raw <= 0) 0 else @as(u64, @intCast(sec_raw));
+    const usec: u64 = if (usec_raw <= 0) 0 else @as(u64, @intCast(usec_raw));
+    return sec * 1_000_000 + usec;
+}
+
+fn rusageCpuUsec(usage: anytype) u64 {
+    const utime = usage.utime;
+    const stime = usage.stime;
+    const user = if (@hasField(@TypeOf(utime), "tv_sec"))
+        signedTimevalUsec(utime.tv_sec, utime.tv_usec)
+    else
+        signedTimevalUsec(utime.sec, utime.usec);
+    const system = if (@hasField(@TypeOf(stime), "tv_sec"))
+        signedTimevalUsec(stime.tv_sec, stime.tv_usec)
+    else
+        signedTimevalUsec(stime.sec, stime.usec);
+    return user + system;
+}
+
 pub fn waitpid(pid: pid_t, flags: u32) WaitPidResult {
     var status: c_int = undefined;
     while (true) {
@@ -139,6 +168,25 @@ pub fn waitpid(pid: pid_t, flags: u32) WaitPidResult {
             .SUCCESS => return .{ .pid = rc, .status = @bitCast(status) },
             .INTR => continue,
             .CHILD => unreachable,
+            .INVAL => unreachable,
+            else => unreachable,
+        }
+    }
+}
+
+pub fn wait4(pid: pid_t, flags: u32) Wait4Result {
+    var status: c_int = undefined;
+    var usage = std.mem.zeroes(std.c.rusage);
+    while (true) {
+        const rc = std.c.wait4(pid, &status, @intCast(flags), &usage);
+        switch (errno(rc)) {
+            .SUCCESS => return .{
+                .pid = rc,
+                .status = @bitCast(status),
+                .cpu_usec = rusageCpuUsec(usage),
+            },
+            .INTR => continue,
+            .CHILD => return .{ .pid = 0, .status = 0, .cpu_usec = 0 },
             .INVAL => unreachable,
             else => unreachable,
         }

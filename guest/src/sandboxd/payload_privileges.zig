@@ -129,6 +129,53 @@ fn installFilter() !void {
     try checked(linux.syscall3(.seccomp, linux.SECCOMP.SET_MODE_FILTER, 0, @intFromPtr(&program)));
 }
 
+const clone_thread: u32 = 0x00010000;
+const fork_filters = blk: {
+    @setEvalBranchQuota(1000);
+    var out: [32]Filter = undefined;
+    var n: usize = 0;
+    out[n] = .{ .code = 0x20, .k = 4 };
+    n += 1;
+    out[n] = .{ .code = 0x15, .jt = 1, .k = audit_arch };
+    n += 1;
+    out[n] = .{ .code = 0x06, .k = ret_kill_process };
+    n += 1;
+    out[n] = .{ .code = 0x20, .k = 0 };
+    n += 1;
+    if (@hasField(linux.SYS, "fork")) {
+        out[n] = .{ .code = 0x15, .jf = 1, .k = @intFromEnum(linux.SYS.fork) };
+        n += 1;
+        out[n] = .{ .code = 0x06, .k = ret_eperm };
+        n += 1;
+    }
+    if (@hasField(linux.SYS, "vfork")) {
+        out[n] = .{ .code = 0x15, .jf = 1, .k = @intFromEnum(linux.SYS.vfork) };
+        n += 1;
+        out[n] = .{ .code = 0x06, .k = ret_eperm };
+        n += 1;
+    }
+    out[n] = .{ .code = 0x15, .jt = 1, .k = @intFromEnum(linux.SYS.clone) };
+    n += 1;
+    out[n] = .{ .code = 0x06, .k = ret_allow };
+    n += 1;
+    out[n] = .{ .code = 0x20, .k = 16 };
+    n += 1;
+    out[n] = .{ .code = 0x45, .jt = 1, .k = clone_thread };
+    n += 1;
+    out[n] = .{ .code = 0x06, .k = ret_eperm };
+    n += 1;
+    out[n] = .{ .code = 0x06, .k = ret_allow };
+    n += 1;
+    break :blk out[0..n].*;
+};
+
+/// Additional inherited filter: fork and non-thread clone remain prohibited.
+pub fn denyProcessCreation() !void {
+    try checked(linux.prctl(pr_set_no_new_privs, 1, 0, 0, 0));
+    const program: Program = .{ .len = fork_filters.len, .filter = &fork_filters };
+    try checked(linux.syscall3(.seccomp, linux.SECCOMP.SET_MODE_FILTER, 0, @intFromPtr(&program)));
+}
+
 fn verifyDropped() !void {
     var header: CapHeader = .{};
     var data = [_]CapData{ .{}, .{} };
@@ -242,4 +289,53 @@ test "seccomp rejects alternate ABIs and every namespace clone flag" {
     inline for (.{ "read", "write", "execve", "wait4", "mmap", "mprotect", "futex" }) |name| {
         try std.testing.expectEqual(ret_allow, verdict(audit_arch, @intFromEnum(@field(linux.SYS, name)), 0));
     }
+}
+
+fn forkVerdict(arch: u32, syscall: u32, flags: u32) u32 {
+    var accumulator: u32 = 0;
+    var pc: usize = 0;
+    while (pc < fork_filters.len) {
+        const instruction = fork_filters[pc];
+        pc += 1;
+        switch (instruction.code) {
+            0x20 => accumulator = switch (instruction.k) {
+                0 => syscall,
+                4 => arch,
+                16 => flags,
+                else => unreachable,
+            },
+            0x15 => pc += if (accumulator == instruction.k) instruction.jt else instruction.jf,
+            0x45 => pc += if (accumulator & instruction.k != 0) instruction.jt else instruction.jf,
+            0x06 => return instruction.k,
+            else => unreachable,
+        }
+    }
+    unreachable;
+}
+
+test "fork filter denies process creation and permits thread clone" {
+    try std.testing.expectEqual(ret_kill_process, forkVerdict(0x40000003, @intFromEnum(linux.SYS.read), 0));
+    if (@hasField(linux.SYS, "fork")) {
+        try std.testing.expectEqual(ret_eperm, forkVerdict(audit_arch, @intFromEnum(linux.SYS.fork), 0));
+    }
+    if (@hasField(linux.SYS, "vfork")) {
+        try std.testing.expectEqual(ret_eperm, forkVerdict(audit_arch, @intFromEnum(linux.SYS.vfork), 0));
+    }
+    try std.testing.expectEqual(ret_eperm, forkVerdict(audit_arch, @intFromEnum(linux.SYS.clone), 0));
+    try std.testing.expectEqual(ret_allow, forkVerdict(audit_arch, @intFromEnum(linux.SYS.clone), clone_thread));
+    try std.testing.expectEqual(ret_allow, forkVerdict(audit_arch, @intFromEnum(linux.SYS.read), 0));
+}
+
+test "payload seccomp denies fork independently of descendant allowance" {
+    const child = linux.fork();
+    try checked(child);
+    if (child == 0) {
+        denyProcessCreation() catch linux.exit(90);
+        const grandchild = linux.fork();
+        if (linux.errno(grandchild) != .PERM) linux.exit(91);
+        linux.exit(0);
+    }
+    var status: u32 = 0;
+    try checked(linux.waitpid(@intCast(child), &status, 0));
+    try std.testing.expectEqual(@as(u32, 0), status);
 }

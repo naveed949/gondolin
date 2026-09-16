@@ -4,6 +4,11 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Add the versioned `scoped-tree-runner/v1` profile for live repository/cache/temp
+  roots, operation-specific VFS, empty-environment payload launch, and payload
+  cgroup/wait4 accounting. Exact-file `scoped-runner` remains unchanged. The
+  profile is implemented source, not AdaptiveSandbox admission or qualification.
+
 ## 0.12.1-adaptivesandbox.8
 
 - Fail scoped-runner settlement closed when guest cgroup accounting is missing,
