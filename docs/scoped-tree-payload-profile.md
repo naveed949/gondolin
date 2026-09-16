@@ -1,7 +1,8 @@
 # Scoped tree and payload resource profile
 
-Status: runtime implemented against the native contract; public manifest
-advertising, AdaptiveSandbox admission, and qualification remain pending.
+Status: runtime implemented and advertised as `scoped-tree-runner` after
+host/guest tests, including CI VM evidence. AdaptiveSandbox admission and
+qualification remain pending.
 Tracking: [AdaptiveSandbox #39](https://github.com/naveed949/AdaptiveSandbox/issues/39)
 and [Gondolin #23](https://github.com/naveed949/gondolin/issues/23).
 The reference is AdaptiveSandbox's `docs/scoped-runner-native-contract.md` at
@@ -12,8 +13,10 @@ The reference is AdaptiveSandbox's `docs/scoped-runner-native-contract.md` at
 Introduce a distinct `scoped-tree-runner/v1` profile. Preserve the existing
 `scoped-runner` exact-file profile and its historical evidence. Availability must
 be negotiated against the exact package, image, enforcement policy and observer
-versions. A manifest may advertise the new profile only after its implementation
-and runtime tests pass. A source design or parser is not an active guarantee.
+versions (`root-bound-openat2/v1`, `no-fork-landlock/v1`,
+`payload-cgroup-wait4/v1`, guest feature `exec.scoped-tree-runner/v1`). The
+public feature manifest advertises the profile as active after implementation
+and runtime tests. A source design or parser is not an active guarantee.
 
 AdaptiveSandbox alone selects a registered target from the public `{ target }`
 argument and compiles effective canonical authority. Gondolin receives the
