@@ -157,7 +157,7 @@ class ScopedTreeHandle implements VirtualFileHandle {
   }
 
   statSync(options?: object): Stats {
-    return fs.fstatSync(this.requireFd()) as Stats;
+    return guestOwnedStats(fs.fstatSync(this.requireFd()) as Stats);
   }
 
   async truncate(len = 0) {
@@ -566,11 +566,23 @@ export class ScopedTreeProvider
       linuxOpenFlag("O_PATH", O_PATH) | linuxOpenFlag("O_CLOEXEC", O_CLOEXEC) | extraFlags,
     );
     try {
-      return fs.fstatSync(fd) as Stats;
+      return guestOwnedStats(fs.fstatSync(fd) as Stats);
     } finally {
       fs.closeSync(fd);
     }
   }
+}
+
+function guestOwnedStats(stats: Stats): Stats {
+  // Guest payloads run as uid 0 without CAP_DAC_OVERRIDE; FUSE default_permissions
+  // would otherwise apply host directory ownership to those calls.
+  const result: Stats = Object.assign(
+    Object.create(Object.getPrototypeOf(stats)),
+    stats,
+  );
+  Reflect.set(result, "uid", typeof stats.uid === "bigint" ? 0n : 0);
+  Reflect.set(result, "gid", typeof stats.gid === "bigint" ? 0n : 0);
+  return result;
 }
 
 export function toProviderPath(guestPath: string): string {

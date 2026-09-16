@@ -128,8 +128,15 @@ test(
       assert.match(String(source.readFileSync("utf8")), /export const n/);
       source.closeSync();
 
+      const cacheStats = provider.statSync("/cache");
+      assert.equal(cacheStats.uid, 0);
+      assert.equal(cacheStats.gid, 0);
+
       const late = provider.openSync("/cache/late-created.bin", "w");
       late.writeFileSync("after-admission");
+      const lateStats = late.statSync();
+      assert.equal(lateStats.uid, 0);
+      assert.equal(lateStats.gid, 0);
       late.closeSync();
       assert.equal(
         fs.readFileSync(path.join(roots.cache.hostPath, "late-created.bin"), "utf8"),
