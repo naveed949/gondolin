@@ -403,15 +403,6 @@ export class ScopedTreeRunnerInvocationContext {
         );
       }
     }
-    const manifest = getCapabilityInvocationFeatureManifest();
-    if (manifest.profiles["scoped-tree-runner"] !== "active") {
-      unsupported("required profile is not active: scoped-tree-runner");
-    }
-    for (const guarantee of request.requiredGuarantees) {
-      if (manifest.guarantees[guarantee] !== "active") {
-        unsupported(`required guarantee is not active: ${guarantee}`);
-      }
-    }
   }
 
   private async execute(

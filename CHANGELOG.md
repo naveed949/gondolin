@@ -8,10 +8,8 @@ All notable changes to Gondolin are documented here.
   openat2 VFS, private cache/temp roots with retained identities, no-fork
   payload confinement, and payload-subtree cgroup/wait4 resource accounting.
   `clearEnv` exec no longer inherits VM defaultEnv. The public feature
-  manifest advertises `scoped-tree-runner` as active with policy versions
-  `root-bound-openat2/v1`, `no-fork-landlock/v1`, and `payload-cgroup-wait4/v1`.
-  AdaptiveSandbox admission, consumer pins, and qualified matrix rows remain
-  out of scope.
+  manifest does not advertise the profile yet; AdaptiveSandbox admission,
+  consumer pins, and qualified matrix rows remain out of scope.
 
 ## 0.12.1-adaptivesandbox.8
 

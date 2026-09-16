@@ -217,25 +217,10 @@ test("exec protocol carries tree roots, empty-env, and payload pids = children+1
   ]);
 });
 
-test("feature manifest advertises scoped-tree-runner/v1 after runtime evidence", () => {
+test("feature manifest does not advertise scoped-tree-runner before runtime evidence", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
-  assert.equal(manifest.profiles["scoped-tree-runner"], "active");
+  assert.equal(manifest.profiles["scoped-tree-runner"], undefined);
   assert.equal(manifest.profiles["scoped-runner"], "active");
-  for (const guarantee of SCOPED_TREE_RUNNER_GUARANTEES) {
-    assert.equal(manifest.guarantees[guarantee], "active", guarantee);
-  }
-  assert.equal(manifest.domains["environment.scoped-tree-runner"], "active");
-  assert.equal(manifest.operations["filesystem.read.tree"], "active");
-  assert.equal(manifest.operations["filesystem.write.private-regular"], "active");
-  assert.equal(manifest.operations["filesystem.create.private-regular"], "active");
-  assert.equal(manifest.operations["process.no-fork"], "active");
-  assert.equal(manifest.guarantees["per-invocation-cpu"], "unverified");
-  assert.equal(
-    manifest.qualifications[
-      "scoped-tree-runner.resources/qemu/linux/released-image-kernel-arch-bundle"
-    ],
-    undefined,
-  );
 });
 
 test("private-root destruction is observed independently of vm.close", () => {
