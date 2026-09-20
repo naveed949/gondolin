@@ -1,8 +1,9 @@
 # Scoped tree and payload resource profile
 
-Status: runtime implemented against the native contract. Public manifest
-advertising of `scoped-tree-runner` remains deferred (`unsupported`) until
-advertise is independently earned after Gondolin #29 lands. AdaptiveSandbox
+Status: Linux live-root identity/`openat2`/operation-table foundation from
+Gondolin #29 plus the `scoped-tree-runner/v1` runtime (payload launch, ambient
+confinement, payload-only accounting). Public manifest advertising of
+`scoped-tree-runner` remains deferred (`unsupported`). AdaptiveSandbox
 admission and qualification remain pending.
 Tracking: [AdaptiveSandbox #39](https://github.com/naveed949/AdaptiveSandbox/issues/39)
 and [Gondolin #23](https://github.com/naveed949/gondolin/issues/23).
