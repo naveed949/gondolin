@@ -306,6 +306,14 @@ export type ExecRequest = {
     isolate_ipc?: boolean;
     /** empty device and ambient-socket mounts required before process launch */
     isolate_devices?: boolean;
+    /** Overlay `/proc` together with device isolation; keep procfs when false */
+    isolate_proc?: boolean;
+    /** Deny clone/fork/vfork after the entrypoint image is executing */
+    deny_fork?: boolean;
+    /** Repository-style read directory trees for Landlock */
+    allowed_readable_directories?: string[];
+    /** Private write directory trees for Landlock */
+    allowed_writable_directories?: string[];
     /** working directory */
     cwd?: string;
     /** whether stdin messages will be sent */
@@ -509,6 +517,13 @@ export function buildExecRequest(
     cleaned.isolate_ipc = payload.isolate_ipc;
   if (payload.isolate_devices !== undefined)
     cleaned.isolate_devices = payload.isolate_devices;
+  if (payload.isolate_proc !== undefined)
+    cleaned.isolate_proc = payload.isolate_proc;
+  if (payload.deny_fork !== undefined) cleaned.deny_fork = payload.deny_fork;
+  if (payload.allowed_readable_directories !== undefined)
+    cleaned.allowed_readable_directories = payload.allowed_readable_directories;
+  if (payload.allowed_writable_directories !== undefined)
+    cleaned.allowed_writable_directories = payload.allowed_writable_directories;
   if (payload.cwd !== undefined) cleaned.cwd = payload.cwd;
   if (payload.stdin !== undefined) cleaned.stdin = payload.stdin;
   if (payload.pty !== undefined) cleaned.pty = payload.pty;

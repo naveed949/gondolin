@@ -57,6 +57,7 @@ import {
   envInputToEntries,
   mapToEnvArray,
   mergeEnvInputs,
+  mergeExecEnv,
   parseEnvEntry,
   resolveEnvNumber,
 } from "../utils/env.ts";
@@ -1171,7 +1172,11 @@ fi
     try {
       await this.startAutomatically();
 
-      const mergedEnv = mergeEnvInputs(this.defaultEnv, options.env);
+      const mergedEnv = mergeExecEnv(
+        this.defaultEnv,
+        options.env,
+        options.clearEnv,
+      );
 
       const message = {
         type: "exec" as const,
@@ -1192,6 +1197,10 @@ fi
           : undefined,
         isolate_ipc: options.isolateIpc ? true : undefined,
         isolate_devices: options.isolateDevices ? true : undefined,
+        isolate_proc: options.isolateProc === false ? false : options.isolateProc ? true : undefined,
+        deny_fork: options.denyFork ? true : undefined,
+        allowed_readable_directories: options.allowedReadableDirectories,
+        allowed_writable_directories: options.allowedWritableDirectories,
         cwd: options.cwd,
         stdin: session.stdinEnabled ? true : undefined,
         pty: options.pty ? true : undefined,
@@ -2324,6 +2333,7 @@ export const __test = {
   composeVfsHooks,
   buildShellEnv,
   mergeEnvInputs,
+  mergeExecEnv,
   envInputToEntries,
   parseEnvEntry,
   mapToEnvArray,

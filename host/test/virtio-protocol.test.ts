@@ -180,6 +180,26 @@ test("virtio-protocol: buildExecRequest preserves descendant denial", () => {
   });
 });
 
+test("virtio-protocol: buildExecRequest preserves tree roots and no-fork policy", () => {
+  const req = buildExecRequest(11, {
+    cmd: "/bin/busybox",
+    isolate_devices: true,
+    isolate_proc: false,
+    deny_fork: true,
+    allowed_readable_directories: ["/data/repo"],
+    allowed_writable_directories: ["/data/cache", "/data/tmp"],
+  });
+
+  assert.deepEqual(req.p, {
+    cmd: "/bin/busybox",
+    isolate_devices: true,
+    isolate_proc: false,
+    deny_fork: true,
+    allowed_readable_directories: ["/data/repo"],
+    allowed_writable_directories: ["/data/cache", "/data/tmp"],
+  });
+});
+
 test("virtio-protocol: buildStdinData and buildPtyResize shape", () => {
   const stdin = buildStdinData(1, Buffer.from("hi"));
   assert.deepEqual(stdin, {

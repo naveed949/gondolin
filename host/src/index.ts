@@ -129,6 +129,24 @@ export {
   type ScopedTreeRunnerInvocationRequest,
 } from "./scoped-tree.ts";
 export {
+  SCOPED_TREE_RUNNER_GUARANTEES,
+  SCOPED_TREE_CPU_WAIT4_ALLOWANCE_USEC,
+  bindScopedTreeProvider,
+  preparePrivateRoot,
+  observeRootIdentity,
+  cpuAgreesWithWait4,
+  peakChildren,
+  type ScopedTreeRunnerGuarantee,
+  type ScopedTreeRunnerInvokeOptions,
+  type ScopedTreeRunnerFilesystemEffect,
+  type ScopedTreeRunnerProcessEvent,
+  type ScopedTreeRunnerInvocationEvidence,
+  type ScopedTreeRunnerInvocationResult,
+  type ScopedTreeRunnerResourceAccounting,
+  type CanonicalScopedTreeRunnerRequest,
+  type ScopedTreeRootSpec,
+} from "./scoped-tree-runner.ts";
+export {
   ADAPTIVESANDBOX_PIN_SCHEMA_VERSION,
   ADAPTIVESANDBOX_MATRIX_SCHEMA_VERSION,
   ADAPTIVESANDBOX_REPORT_SCHEMA_VERSION,
