@@ -37,7 +37,7 @@ identity. There is no macOS accounting implementation or macOS qualification.
 
 | Domain | Existing fork behavior | Required prerequisite or evidence |
 | --- | --- | --- |
-| Directory trees | Scoped reads and ephemeral writes are exact predeclared files | Canonical directory-root authority with descendant create/remove/rename semantics, safe symlink handling, and bounded accounting across all mutations; enumerating current files does not preserve tree authority |
+| Directory trees | Linux live-root identity, `openat2` resolution, and repository/private operation table exist as a source foundation; the profile is unsupported | Guest ambient confinement, payload launch through those roots, and independent qualification evidence |
 | CPU | Host QEMU counter polling plus guest cgroup accounting | Defined attribution and overshoot contract, adversarial released-image enforcement evidence, and independent accounting checks |
 | Memory | Whole-MiB guest RAM limit and guest cgroup limit/peak | Reconcile canonical byte budgets with alignment and VM overhead; independent peak and exhaustion evidence; guest reports do not constitute independent host accounting |
 | Processes | Guest cgroup simultaneous PID limit/peak | Reconcile PID membership with AdaptiveSandbox descendant counts and independently validate complete-tree fork denial and cleanup |

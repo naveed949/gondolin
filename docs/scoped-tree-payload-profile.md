@@ -1,7 +1,10 @@
 # Scoped tree and payload resource profile
 
-Status: design reviewed against the native contract; implementation and
-qualification pending. No active runtime feature is advertised.
+Status: live root-tree identity, atomic resolution, and operation-table
+foundation implemented on Linux; the profile remains unsupported and is not
+advertised. Payload launch, guest ambient confinement, payload-only resource
+accounting, consumer pin, and qualification pending. No active runtime feature
+is advertised.
 Tracking: [AdaptiveSandbox #39](https://github.com/naveed949/AdaptiveSandbox/issues/39)
 and [Gondolin #23](https://github.com/naveed949/gondolin/issues/23).
 The reference is AdaptiveSandbox's `docs/scoped-runner-native-contract.md` at
@@ -48,14 +51,14 @@ prepared before confinement and remain part of the bound authority. The runtime
 must allow new regular-file names chosen after admission. It must enforce this
 operation table separately for each root and for open handles:
 
-| Operation | Repository | Private root |
-| --- | --- | --- |
-| Lookup, enumerate, read regular files | Allow within root | Allow within root |
-| Create, write, truncate, unlink regular files | Deny | Allow |
-| Rename or hard-link a regular file in the same directory | Deny | Allow |
-| Rename or link across directories or roots | Deny | Deny |
-| Create/remove directories, create symlinks or special files | Deny | Deny |
-| Change ownership, mode, mounts or filesystem policy | Deny | Deny |
+| Operation                                                   | Repository        | Private root      |
+| ----------------------------------------------------------- | ----------------- | ----------------- |
+| Lookup, enumerate, read regular files                       | Allow within root | Allow within root |
+| Create, write, truncate, unlink regular files               | Deny              | Allow             |
+| Rename or hard-link a regular file in the same directory    | Deny              | Allow             |
+| Rename or link across directories or roots                  | Deny              | Deny              |
+| Create/remove directories, create symlinks or special files | Deny              | Deny              |
+| Change ownership, mode, mounts or filesystem policy         | Deny              | Deny              |
 
 Open handles retain object identity across allowed rename/unlink. A closed or
 revoked handle never regains authority when its descriptor number is reused.
@@ -79,13 +82,13 @@ undeclared IPC and devices remain denied.
 Bounds come directly from effective `ScopedTestLimits`. They are distinct from
 runtime provisioning and must not be widened during translation.
 
-| Field | Required meaning |
-| --- | --- |
-| `cpuMs` | Cumulative payload-subtree CPU, excluding VM boot and host QEMU overhead |
-| `memoryBytes` | Payload cgroup charged peak and ceiling in bytes; no upward MiB rounding |
-| `children` | Maximum descendants, excluding the entrypoint; does not permit fork |
+| Field         | Required meaning                                                                         |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| `cpuMs`       | Cumulative payload-subtree CPU, excluding VM boot and host QEMU overhead                 |
+| `memoryBytes` | Payload cgroup charged peak and ceiling in bytes; no upward MiB rounding                 |
+| `children`    | Maximum descendants, excluding the entrypoint; does not permit fork                      |
 | `outputBytes` | Returned UTF-8 payload bytes, with independently specified transport and per-file bounds |
-| `wallMs` | Payload runner interval, with setup and teardown recorded separately |
+| `wallMs`      | Payload runner interval, with setup and teardown recorded separately                     |
 
 The cgroup membership ceiling is checked `children + 1`; reported peak children
 is checked `pidsPeak - 1` only when entrypoint membership is established. Missing
@@ -147,6 +150,9 @@ An old receipt must not gain new resource or revocation guarantees through parsi
 2. Correct guest accounting loss handling, then add atomic root resolution,
    operation-specific VFS enforcement, payload policy and resource accounting.
    Each prerequisite may merge independently, without advertising profile support.
+   The Linux live-root identity/`openat2`/operation-table foundation is the next
+   source prerequisite after guest observation-loss handling; it does not enable
+   the profile or payload launch.
 3. Run actual guest tests and independent ordinary-Gateway S01–S12 observations.
    Require positive controls, concurrent disjoint invocations, fault injection at
    real boundaries and receipt replay. Fake-VM tests validate logic only.

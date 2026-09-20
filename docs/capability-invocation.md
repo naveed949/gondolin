@@ -479,11 +479,11 @@ bytes are private output, not proof that those bytes reached the host target.
 The containing signed request digest binds the selected target and invocation
 ID; the same envelope binds execution, ceiling, runtime and result identity.
 
-| State | Meaning | Retry implications |
-| --- | --- | --- |
-| `not_published` | No visibility primitive was attempted by this invocation | Does not prove other actors left the target unchanged or grant retry authority |
-| `published` | Host link/rename returned successfully | Historical visibility, even if a later verification or cleanup fails |
-| `indeterminate` | Link/rename was entered but successful completion could not be established | No abort, rollback, or automatic retry inference |
+| State           | Meaning                                                                    | Retry implications                                                             |
+| --------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `not_published` | No visibility primitive was attempted by this invocation                   | Does not prove other actors left the target unchanged or grant retry authority |
+| `published`     | Host link/rename returned successfully                                     | Historical visibility, even if a later verification or cleanup fails           |
+| `indeterminate` | Link/rename was entered but successful completion could not be established | No abort, rollback, or automatic retry inference                               |
 
 `phase` records the last preparation/publication/verification boundary reached,
 independently of cleanup. A successful target verification checks the published
@@ -712,6 +712,17 @@ claim because AdaptiveSandbox has not released a bundle to qualify.
 See [scoped resource prerequisites](scoped-resource-prerequisites.md) for CPU
 observer failure semantics and the remaining tree-authority, resource, and
 independent teardown gaps before AdaptiveSandbox qualification.
+
+## Scoped-tree-runner v1 (unsupported)
+
+`scoped-tree-runner` is a distinct future profile. Linux now pins one repository
+read root and two private write roots, resolves names with `openat2` under those
+descriptors, and enforces the accepted repository/private operation table. The
+feature manifest keeps the profile `unsupported`. Payload launch, guest ambient
+confinement, and payload-only CPU/memory/children accounting remain unimplemented.
+Adapter, callback, mount, and guest-configuration inputs cannot widen this
+foundation into an active invocation. Historical exact-file `scoped-runner`
+behavior is unchanged. See [scoped tree and payload resource profile](scoped-tree-payload-profile.md).
 
 ## Experimental credential-free HTTPS profile
 
