@@ -223,17 +223,20 @@ export class ScopedTreeProvider
 
   verifyPinnedIdentities(): void {
     for (const root of this.roots) {
-      const actual = directoryIdentityFromFd(root.fd);
+      let actual: ReturnType<typeof directoryIdentityFromFd> = null;
+      try {
+        actual = directoryIdentityFromFd(root.fd);
+      } catch {
+        actual = null;
+      }
       if (
         actual === null ||
         actual.dev !== root.identity.dev ||
         actual.ino !== root.identity.ino ||
         actual.birthtimeNs !== root.identity.birthtimeNs
       ) {
-        throw createErrnoError(
-          ERRNO.ESTALE ?? ERRNO.EIO,
-          "open",
-          root.guestPath,
+        throw new Error(
+          `filesystem.${root.role}.identity: pinned root identity is unavailable or changed`,
         );
       }
     }

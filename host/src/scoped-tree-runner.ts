@@ -490,7 +490,17 @@ export class ScopedTreeRunnerInvocationContext {
           observed.push({ ...effect, decision: "observed" });
         }
       });
-      provider.verifyPinnedIdentities();
+      try {
+        provider.verifyPinnedIdentities();
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        throw new CapabilityAdmissionError(
+          "invalid_request",
+          message.startsWith("filesystem.")
+            ? message
+            : `filesystem.repository.identity: ${message}`,
+        );
+      }
 
       vm = await VM.create({
         autoStart: false,
@@ -705,13 +715,17 @@ export class ScopedTreeRunnerInvocationContext {
     const vmStopped = vm !== null && closeError === null && runnerStopped;
     const teardownComplete =
       vmStopped && handlesRevoked && rootsClosed && privateRootsDestroyed;
-    if (admissionError && (!commandDispatched || teardownComplete)) {
-      identity.finish(
-        "revoked",
-        commandDispatched || (vm !== null && teardownComplete)
-          ? true
-          : privateRootsDestroyed,
-      );
+    const containmentVerified =
+      privateRootsDestroyed &&
+      closeError === null &&
+      (provider !== null ? handlesRevoked && rootsClosed : true) &&
+      (vm === null || vmStopped);
+    if (
+      admissionError &&
+      ((!commandDispatched && containmentVerified) ||
+        (commandDispatched && teardownComplete))
+    ) {
+      identity.finish("revoked", true);
       throw admissionError;
     }
 
@@ -738,9 +752,12 @@ export class ScopedTreeRunnerInvocationContext {
     }
     if (!teardownComplete) {
       outcome = "teardown_failure";
-      error = closeError
+      const teardownError = closeError
         ? safeError(closeError)
         : "private state or handle revocation could not be independently confirmed";
+      error = admissionError
+        ? `${safeError(admissionError)}; ${teardownError}`
+        : teardownError;
     }
 
     const settledAt = new Date().toISOString();
@@ -889,7 +906,8 @@ export function bindScopedTreeProvider(
   onDecision?: (decision: ScopedTreeDecision) => void,
 ): ScopedTreeProvider {
   const roles: ScopedTreeRole[] = ["repository", "cache", "temp"];
-  const roots: ScopedTreeRootBinding[] = roles.map((role) => {
+  const roots: ScopedTreeRootBinding[] = [];
+  for (const role of roles) {
     const spec = request.capabilities.filesystem[role];
     try {
       const expected = parseDirectoryIdentity(
@@ -897,20 +915,31 @@ export function bindScopedTreeProvider(
         `filesystem.${role}.identity`,
       );
       const fd = pinDirectory(spec.hostPath, expected);
-      return {
+      roots.push({
         role,
         guestPath: spec.guestPath,
         fd,
         identity: expected,
-      };
+      });
     } catch (caught) {
+      let closeFailed = false;
+      for (const root of roots) {
+        try {
+          fs.closeSync(root.fd);
+        } catch {
+          closeFailed = true;
+        }
+      }
+      if (closeFailed) {
+        throw caught instanceof Error ? caught : new Error(String(caught));
+      }
       const message = caught instanceof Error ? caught.message : String(caught);
       throw new CapabilityAdmissionError(
         message.includes("cannot") ? "unsupported" : "invalid_request",
         `${capabilityPath(role, "identity")}: ${message}`,
       );
     }
-  });
+  }
   return new ScopedTreeProvider(roots, onDecision);
 }
 

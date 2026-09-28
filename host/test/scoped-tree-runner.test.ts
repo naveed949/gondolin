@@ -323,9 +323,9 @@ test("projected environment, network, credentials, git, ipc, devices, and shell 
   );
 });
 
-test("feature manifest defers scoped-tree-runner advertise until it is earned", () => {
+test("feature manifest advertises scoped-tree-runner/v1 without qualification", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
-  assert.equal(manifest.profiles["scoped-tree-runner"], "unsupported");
+  assert.equal(manifest.profiles["scoped-tree-runner"], "active");
   assert.equal(manifest.profiles["scoped-runner"], "active");
   for (const guarantee of [
     "root-bound-repository-read",
@@ -335,19 +335,13 @@ test("feature manifest defers scoped-tree-runner advertise until it is earned", 
     "payload-memory",
     "payload-children",
   ]) {
-    assert.notEqual(manifest.guarantees[guarantee], "active", guarantee);
+    assert.equal(manifest.guarantees[guarantee], "active", guarantee);
   }
-  assert.notEqual(manifest.domains["environment.scoped-tree-runner"], "active");
-  assert.notEqual(manifest.operations["filesystem.read.tree"], "active");
-  assert.notEqual(
-    manifest.operations["filesystem.write.private-regular"],
-    "active",
-  );
-  assert.notEqual(
-    manifest.operations["filesystem.create.private-regular"],
-    "active",
-  );
-  assert.notEqual(manifest.operations["process.no-fork"], "active");
+  assert.equal(manifest.domains["environment.scoped-tree-runner"], "active");
+  assert.equal(manifest.operations["filesystem.read.tree"], "active");
+  assert.equal(manifest.operations["filesystem.write.private-regular"], "active");
+  assert.equal(manifest.operations["filesystem.create.private-regular"], "active");
+  assert.equal(manifest.operations["process.no-fork"], "active");
   assert.equal(manifest.guarantees["per-invocation-cpu"], "unverified");
   assert.equal(manifest.guarantees["per-invocation-memory"], "unverified");
   assert.equal(manifest.guarantees["per-invocation-pids"], "unverified");

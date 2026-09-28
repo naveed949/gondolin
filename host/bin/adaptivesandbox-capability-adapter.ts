@@ -107,7 +107,7 @@ async function invoke(request: AdapterRequest): Promise<unknown> {
     invocation.profile === "scoped-tree-runner"
   ) {
     throw new Error(
-      "request.launch: scoped-tree-runner payload launch is unsupported; live-root enforcement is not an active Capability Invocation profile",
+      "request.launch: scoped-tree-runner/v1 is advertised, but AdaptiveSandbox adapter admission remains pending",
     );
   }
   const context =

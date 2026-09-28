@@ -421,6 +421,8 @@ test "operation table denies repository writes and private directory mutations" 
     try std.testing.expectError(error.Denied, repo.createFile("new.txt"));
     try std.testing.expectError(error.Denied, repo.writeFile("a.txt", "x"));
     try std.testing.expectError(error.Denied, repo.unlinkFile("a.txt"));
+    try std.testing.expectError(error.Denied, repo.renameSameDirectory("a.txt", "b.txt"));
+    try std.testing.expectError(error.Denied, repo.linkSameDirectory("a.txt", "b.txt"));
     try std.testing.expectError(error.Denied, repo.mkdirDenied("dir"));
     try std.testing.expectError(error.Denied, cache.mkdirDenied("other"));
     try std.testing.expectError(error.Denied, cache.symlinkDenied("a", "b"));

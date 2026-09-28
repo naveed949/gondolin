@@ -3,7 +3,8 @@
 Status: Linux live-root identity/`openat2`/operation-table foundation from
 Gondolin #29 plus the `scoped-tree-runner/v1` runtime (payload launch, ambient
 confinement, payload-only accounting). Public manifest advertising of
-`scoped-tree-runner` remains deferred (`unsupported`). AdaptiveSandbox
+`scoped-tree-runner` is `active` after guest and host tests of the operation
+table, root identity, empty environment, resources, and denials. AdaptiveSandbox
 admission and qualification remain pending.
 Tracking: [AdaptiveSandbox #39](https://github.com/naveed949/AdaptiveSandbox/issues/39)
 and [Gondolin #23](https://github.com/naveed949/gondolin/issues/23).

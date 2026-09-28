@@ -185,6 +185,30 @@ test(
 );
 
 test(
+  "pinned identity recheck names the closed root",
+  { skip },
+  () => {
+    const roots = makeRoots();
+    const provider = providerFrom(roots);
+    try {
+      const fd = (
+        provider as unknown as { roots: Array<{ fd: number }> }
+      ).roots[0]!.fd;
+      fs.closeSync(fd);
+      assert.throws(
+        () => provider.verifyPinnedIdentities(),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message.startsWith("filesystem.repository.identity:"),
+      );
+    } finally {
+      provider.dispose();
+      fs.rmSync(roots.parent, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "replaced directory identity is denied at the capability path",
   { skip },
   () => {
@@ -268,6 +292,16 @@ test(
       assert.throws(() => provider.openSync("/repo/source.ts", "w"), /ERRNO_1/);
       assert.throws(() => provider.openSync("/repo/source.ts", "r+"), /ERRNO_1/);
       assert.throws(() => provider.unlinkSync("/repo/source.ts"), /ERRNO_1/);
+      assert.throws(
+        () => provider.renameSync("/repo/source.ts", "/repo/renamed.ts"),
+        /ERRNO_1/,
+      );
+      assert.throws(
+        () => provider.linkSync("/repo/source.ts", "/repo/linked.ts"),
+        /ERRNO_1/,
+      );
+      assert.equal(fs.existsSync(path.join(roots.repository, "renamed.ts")), false);
+      assert.equal(fs.existsSync(path.join(roots.repository, "linked.ts")), false);
       assert.equal(
         fs.readFileSync(path.join(roots.repository, "source.ts"), "utf8"),
         "export const n = 1;\n",

@@ -4,19 +4,23 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
-- Add a Linux live root-tree enforcement foundation for the future
-  `scoped-tree-runner/v1` profile: pin repository/cache/temp directory identities,
-  resolve paths with `openat2` beneath the admitted descriptor, and enforce the
-  accepted repository/private operation table. The profile remains unsupported
-  and is not advertised.
-- Implement the versioned `scoped-tree-runner/v1` runtime: live root-bound
-  openat2 VFS, private cache/temp roots with retained identities, no-fork
-  payload confinement, and payload-subtree cgroup/wait4 resource accounting.
-  `clearEnv` exec no longer inherits VM defaultEnv. Public manifest
-  advertising of `scoped-tree-runner` remains deferred (`unsupported`);
-  generic resource controls and qualification rows stay unverified.
-  AdaptiveSandbox admission, consumer pins, and qualified matrix rows remain
-  out of scope.
+## 0.12.1-adaptivesandbox.9
+
+- Advertise `scoped-tree-runner/v1` as `active` after guest and host tests of
+  the operation table, root identity, empty environment, payload resources, and
+  denials. Generic per-invocation resource controls and qualification rows stay
+  unverified. AdaptiveSandbox gateway admission remains pending. Exact-file
+  `scoped-runner` behavior is unchanged.
+- Refuse a replaced repository, cache, or temp identity before payload launch,
+  including a failed pinned-identity recheck. Claim revocation only when the
+  created descriptors and private roots are closed. Deny ownership and mode
+  setattr, and repository same-directory rename or hard-link, on scoped-tree
+  roots. Exact-file setattr stays a successful no-op.
+- Carry the Linux live root-tree foundation and `scoped-tree-runner/v1` runtime
+  from main: pinned root identities, `openat2` resolution, the repository and
+  private operation table, private cache/temp roots, no-fork confinement,
+  payload-subtree cgroup/wait4 accounting, and `clearEnv` exec that does not
+  inherit VM `defaultEnv`.
 
 ## 0.12.1-adaptivesandbox.8
 

@@ -94,11 +94,12 @@ function requestFor(tree: ReturnType<typeof makeTree>) {
   };
 }
 
-test("feature manifest keeps scoped-tree-runner unsupported", () => {
+test("feature manifest advertises scoped-tree-runner separately from generic writes", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
-  assert.equal(manifest.profiles["scoped-tree-runner"], "unsupported");
+  assert.equal(manifest.profiles["scoped-tree-runner"], "active");
   assert.equal(manifest.profiles["scoped-runner"], "active");
   assert.equal(manifest.operations["filesystem.write"], "unsupported");
+  assert.equal(manifest.operations["filesystem.write.private-regular"], "active");
 });
 
 test("scoped-tree admission rejects omitted domains, callbacks, and adapter widening", () => {
