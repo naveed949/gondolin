@@ -705,8 +705,13 @@ export class ScopedTreeRunnerInvocationContext {
     const vmStopped = vm !== null && closeError === null && runnerStopped;
     const teardownComplete =
       vmStopped && handlesRevoked && rootsClosed && privateRootsDestroyed;
-    if (admissionError && teardownComplete) {
-      identity.finish("revoked", true);
+    if (admissionError && (!commandDispatched || teardownComplete)) {
+      identity.finish(
+        "revoked",
+        commandDispatched || (vm !== null && teardownComplete)
+          ? true
+          : privateRootsDestroyed,
+      );
       throw admissionError;
     }
 

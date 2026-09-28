@@ -258,10 +258,6 @@ const FuseReleaseIn = struct {
     lock_owner: u64,
 };
 
-const FattrFlags = struct {
-    pub const SIZE: u32 = 1 << 3;
-};
-
 const DefaultTtls = struct {
     pub const attr_ms: u64 = 1000;
     pub const entry_ms: u64 = 1000;
@@ -468,7 +464,18 @@ const SandboxFs = struct {
         }
 
         const setattr = try parseSetattr(payload);
-        if ((setattr.valid & FattrFlags.SIZE) != 0) {
+        if (sandboxd.scoped_tree.setattrChangesOwnershipOrMode(setattr.valid)) {
+            var fields = [_]fs_rpc.Field{
+                .{ .name = "ino", .value = .{ .UInt = header.nodeid } },
+            };
+            var response = try self.rpc.?.request("setattr_metadata", &fields);
+            defer response.deinit();
+            if (response.err != 0) {
+                try sendError(self.fuse_fd, header.unique, errnoFromResponse(response.err));
+                return;
+            }
+        }
+        if ((setattr.valid & sandboxd.scoped_tree.fattr_size) != 0) {
             var fields = [_]fs_rpc.Field{
                 .{ .name = "ino", .value = .{ .UInt = header.nodeid } },
                 .{ .name = "size", .value = .{ .UInt = setattr.size } },

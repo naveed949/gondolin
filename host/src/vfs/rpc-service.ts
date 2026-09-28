@@ -199,6 +199,8 @@ export class FsRpcService {
         return this.handleRelease(req);
       case "statfs":
         return this.handleStatfs(req);
+      case "setattr_metadata":
+        return this.handleSetattrMetadata(req);
       default:
         throw createErrnoError(ERRNO.ENOSYS, op);
     }
@@ -676,6 +678,16 @@ export class FsRpcService {
     }
     this.handles.delete(fh);
     await entry.handle.close();
+    return {};
+  }
+
+  private async handleSetattrMetadata(req: Record<string, unknown>) {
+    const ino = requireUint(req.ino, "setattr_metadata", "ino");
+    const entryPath = this.requirePath(ino, "setattr_metadata");
+    const provider = this.provider as {
+      denyMetadataSync?: (vfsPath: string) => void;
+    };
+    provider.denyMetadataSync?.(entryPath);
     return {};
   }
 

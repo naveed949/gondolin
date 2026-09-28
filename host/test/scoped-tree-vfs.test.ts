@@ -24,6 +24,7 @@ import {
   preparePrivateRoot,
   type ScopedTreeRunnerInvocationRequest,
 } from "../src/scoped-tree-runner.ts";
+import { FsRpcService } from "../src/vfs/rpc-service.ts";
 import { ERRNO } from "../src/vfs/utils.ts";
 
 const skip = !linuxAtAvailable() ? "openat2 unavailable" : false;
@@ -255,3 +256,62 @@ test(
 test("errno constants used by denials are present", () => {
   assert.equal(typeof ERRNO.EPERM, "number");
 });
+
+test(
+  "operation table denies repository mutation and ownership or mode changes",
+  { skip },
+  async () => {
+    const roots = makeRoots();
+    const provider = providerFrom(roots);
+    const service = new FsRpcService(provider);
+    try {
+      assert.throws(() => provider.openSync("/repo/source.ts", "w"), /ERRNO_1/);
+      assert.throws(() => provider.openSync("/repo/source.ts", "r+"), /ERRNO_1/);
+      assert.throws(() => provider.unlinkSync("/repo/source.ts"), /ERRNO_1/);
+      assert.equal(
+        fs.readFileSync(path.join(roots.repository, "source.ts"), "utf8"),
+        "export const n = 1;\n",
+      );
+
+      const created = provider.openSync("/cache/truncate-me.bin", "w");
+      created.writeFileSync("abcdef");
+      created.closeSync();
+      const truncated = provider.openSync("/cache/truncate-me.bin", "w");
+      assert.equal(truncated.readFileSync("utf8"), "");
+      truncated.closeSync();
+      assert.throws(
+        () => provider.linkSync("/cache/truncate-me.bin", "/tmp/escape.bin"),
+        /ERRNO_1/,
+      );
+
+      const lookup = await service.handleRequest({
+        v: 1,
+        t: "fs_request",
+        id: 1,
+        p: { op: "lookup", req: { parent_ino: 1, name: "cache" } },
+      });
+      assert.equal(lookup.p.err, 0);
+      const cacheIno = (lookup.p.res as { entry: { ino: number } }).entry.ino;
+      const metadata = await service.handleRequest({
+        v: 1,
+        t: "fs_request",
+        id: 2,
+        p: { op: "setattr_metadata", req: { ino: cacheIno } },
+      });
+      assert.equal(metadata.p.err, ERRNO.EPERM);
+
+      const file = provider.openSync("/cache/mode.bin", "w");
+      file.writeFileSync("mode");
+      file.closeSync();
+      const modeBefore = fs.statSync(path.join(roots.cache.hostPath, "mode.bin")).mode;
+      assert.throws(() => provider.denyMetadataSync("/cache/mode.bin"), /ERRNO_1/);
+      assert.equal(
+        fs.statSync(path.join(roots.cache.hostPath, "mode.bin")).mode,
+        modeBefore,
+      );
+    } finally {
+      provider.dispose();
+      fs.rmSync(roots.parent, { recursive: true, force: true });
+    }
+  },
+);

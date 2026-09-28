@@ -27,6 +27,21 @@ function createService() {
   return new FsRpcService(new MemoryProvider());
 }
 
+test("default providers keep ownership and mode setattr as a no-op success", async () => {
+  const service = createService();
+  const created = await send(service, "mkdir", {
+    parent_ino: 1,
+    name: "dir",
+    mode: 0o755,
+  });
+  assert.equal(created.p.err, 0);
+  const lookup = await send(service, "lookup", { parent_ino: 1, name: "dir" });
+  assert.equal(lookup.p.err, 0);
+  const ino = (lookup.p.res as { entry: { ino: number } }).entry.ino;
+  const metadata = await send(service, "setattr_metadata", { ino });
+  assert.equal(metadata.p.err, 0);
+});
+
 function createTrackedService() {
   const base = new MemoryProvider();
   let closeCount = 0;

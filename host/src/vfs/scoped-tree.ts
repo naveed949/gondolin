@@ -43,7 +43,16 @@ export type ScopedTreeOpenKind =
 
 export type ScopedTreeDecision = {
   /** Filesystem operation classification */
-  operation: ScopedTreeOpenKind | "unlink" | "rename" | "link" | "mkdir" | "rmdir" | "symlink" | "other";
+  operation:
+    | ScopedTreeOpenKind
+    | "unlink"
+    | "rename"
+    | "link"
+    | "mkdir"
+    | "rmdir"
+    | "symlink"
+    | "metadata"
+    | "other";
   /** Guest-visible resource path */
   guestPath: string;
   /** Policy decision */
@@ -428,6 +437,13 @@ export class ScopedTreeProvider
     this.requireOpen();
     const located = this.locate(vfsPath, "symlink");
     this.deny("symlink", vfsPath, capabilityPath(located.root.role, "symlink"));
+  }
+
+  /** Ownership and mode denial for every admitted root */
+  denyMetadataSync(vfsPath: string): void {
+    this.requireOpen();
+    const located = this.locate(vfsPath, "metadata");
+    this.deny("metadata", vfsPath, capabilityPath(located.root.role, "metadata"));
   }
 
   async realpath(vfsPath: string) {
