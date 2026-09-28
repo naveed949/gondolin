@@ -43,7 +43,16 @@ export type ScopedTreeOpenKind =
 
 export type ScopedTreeDecision = {
   /** Filesystem operation classification */
-  operation: ScopedTreeOpenKind | "unlink" | "rename" | "link" | "mkdir" | "rmdir" | "symlink" | "other";
+  operation:
+    | ScopedTreeOpenKind
+    | "unlink"
+    | "rename"
+    | "link"
+    | "mkdir"
+    | "rmdir"
+    | "symlink"
+    | "metadata"
+    | "other";
   /** Guest-visible resource path */
   guestPath: string;
   /** Policy decision */
@@ -214,17 +223,20 @@ export class ScopedTreeProvider
 
   verifyPinnedIdentities(): void {
     for (const root of this.roots) {
-      const actual = directoryIdentityFromFd(root.fd);
+      let actual: ReturnType<typeof directoryIdentityFromFd> = null;
+      try {
+        actual = directoryIdentityFromFd(root.fd);
+      } catch {
+        actual = null;
+      }
       if (
         actual === null ||
         actual.dev !== root.identity.dev ||
         actual.ino !== root.identity.ino ||
         actual.birthtimeNs !== root.identity.birthtimeNs
       ) {
-        throw createErrnoError(
-          ERRNO.ESTALE ?? ERRNO.EIO,
-          "open",
-          root.guestPath,
+        throw new Error(
+          `filesystem.${root.role}.identity: pinned root identity is unavailable or changed`,
         );
       }
     }
@@ -428,6 +440,13 @@ export class ScopedTreeProvider
     this.requireOpen();
     const located = this.locate(vfsPath, "symlink");
     this.deny("symlink", vfsPath, capabilityPath(located.root.role, "symlink"));
+  }
+
+  /** Ownership and mode denial for every admitted root */
+  denyMetadataSync(vfsPath: string): void {
+    this.requireOpen();
+    const located = this.locate(vfsPath, "metadata");
+    this.deny("metadata", vfsPath, capabilityPath(located.root.role, "metadata"));
   }
 
   async realpath(vfsPath: string) {

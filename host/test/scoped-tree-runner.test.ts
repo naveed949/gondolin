@@ -10,6 +10,7 @@ import {
   CapabilityAdmissionError,
   getCapabilityInvocationFeatureManifest,
 } from "../src/index.ts";
+import { linuxAtAvailable } from "../src/linux-at.ts";
 import { buildExecRequest } from "../src/sandbox/virtio-protocol.ts";
 import {
   SCOPED_TREE_CPU_WAIT4_ALLOWANCE_USEC,
@@ -219,9 +220,112 @@ test("exec protocol carries tree roots, empty-env, and payload pids = children+1
   ]);
 });
 
-test("feature manifest defers scoped-tree-runner advertise until it is earned", () => {
+test(
+  "replaced repository pathname does not inherit the pinned root grant",
+  { skip: linuxAtAvailable() ? false : "openat2 unavailable" },
+  async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "gondolin-tree-identity-"));
+    const repositoryPath = path.join(parent, "repo");
+    fs.mkdirSync(repositoryPath);
+    fs.writeFileSync(path.join(repositoryPath, "source.ts"), "original\n");
+    const identity = observeRootIdentity(repositoryPath, "repository");
+    const isolatedCache = preparePrivateRoot(parent, "cache");
+    const isolatedTemp = preparePrivateRoot(parent, "temp");
+    const replacement = path.join(parent, "replacement");
+    fs.mkdirSync(replacement);
+    fs.writeFileSync(path.join(replacement, "source.ts"), "replacement\n");
+    fs.renameSync(repositoryPath, path.join(parent, "moved"));
+    fs.renameSync(replacement, repositoryPath);
+    const context = ScopedTreeRunnerInvocationContext.create(
+      ceiling({
+        filesystem: {
+          ...ceiling().filesystem,
+          repositoryHostPaths: [repositoryPath],
+        },
+      }),
+    );
+    try {
+      await assert.rejects(
+        context.invoke(
+          request({
+            invocationId: "replaced-root",
+            capabilities: {
+              ...request().capabilities,
+              filesystem: {
+                repository: {
+                  hostPath: repositoryPath,
+                  guestPath: "/data/repo",
+                  identity,
+                },
+                cache: { ...isolatedCache, guestPath: "/data/cache" },
+                temp: { ...isolatedTemp, guestPath: "/data/tmp" },
+              },
+            },
+          }),
+        ),
+        (error: unknown) =>
+          error instanceof CapabilityAdmissionError &&
+          error.message.startsWith("filesystem.repository.identity:"),
+      );
+      assert.equal(
+        fs.readFileSync(path.join(repositoryPath, "source.ts"), "utf8"),
+        "replacement\n",
+      );
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  },
+);
+
+test("projected environment, network, credentials, git, ipc, devices, and shell are denied", () => {
+  assert.throws(
+    () =>
+      canonicalizeScopedTreeRunnerInvocationRequest({
+        ...request(),
+        capabilities: {
+          ...request().capabilities,
+          environment: { PATH: "/bin", SECRET: "seeded-credential" },
+        },
+      }),
+    (error: unknown) =>
+      error instanceof CapabilityAdmissionError &&
+      /request\.capabilities/.test(error.message) &&
+      /environment/.test(error.message),
+  );
+  for (const [field, value] of [
+    ["network", "open"],
+    ["credentials", "broker"],
+    ["git", "mutate"],
+    ["ipc", "allow"],
+    ["devices", "kvm"],
+  ] as const) {
+    assert.throws(
+      () =>
+        canonicalizeScopedTreeRunnerInvocationRequest({
+          ...request(),
+          capabilities: { ...request().capabilities, [field]: value },
+        }),
+      (error: unknown) =>
+        error instanceof CapabilityAdmissionError &&
+        error.message.includes(`request.capabilities.${field}`),
+      field,
+    );
+  }
+  assert.throws(
+    () =>
+      canonicalizeScopedTreeRunnerInvocationRequest({
+        ...request(),
+        launch: { ...request().launch, shell: "echo hi" },
+      }),
+    (error: unknown) =>
+      error instanceof CapabilityAdmissionError &&
+      /request\.launch/.test(error.message),
+  );
+});
+
+test("feature manifest advertises scoped-tree-runner/v1 without qualification", () => {
   const manifest = getCapabilityInvocationFeatureManifest();
-  assert.equal(manifest.profiles["scoped-tree-runner"], "unsupported");
+  assert.equal(manifest.profiles["scoped-tree-runner"], "active");
   assert.equal(manifest.profiles["scoped-runner"], "active");
   for (const guarantee of [
     "root-bound-repository-read",
@@ -231,19 +335,13 @@ test("feature manifest defers scoped-tree-runner advertise until it is earned", 
     "payload-memory",
     "payload-children",
   ]) {
-    assert.notEqual(manifest.guarantees[guarantee], "active", guarantee);
+    assert.equal(manifest.guarantees[guarantee], "active", guarantee);
   }
-  assert.notEqual(manifest.domains["environment.scoped-tree-runner"], "active");
-  assert.notEqual(manifest.operations["filesystem.read.tree"], "active");
-  assert.notEqual(
-    manifest.operations["filesystem.write.private-regular"],
-    "active",
-  );
-  assert.notEqual(
-    manifest.operations["filesystem.create.private-regular"],
-    "active",
-  );
-  assert.notEqual(manifest.operations["process.no-fork"], "active");
+  assert.equal(manifest.domains["environment.scoped-tree-runner"], "active");
+  assert.equal(manifest.operations["filesystem.read.tree"], "active");
+  assert.equal(manifest.operations["filesystem.write.private-regular"], "active");
+  assert.equal(manifest.operations["filesystem.create.private-regular"], "active");
+  assert.equal(manifest.operations["process.no-fork"], "active");
   assert.equal(manifest.guarantees["per-invocation-cpu"], "unverified");
   assert.equal(manifest.guarantees["per-invocation-memory"], "unverified");
   assert.equal(manifest.guarantees["per-invocation-pids"], "unverified");

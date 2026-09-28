@@ -26,6 +26,20 @@ pub const Error = error{
     Unavailable,
 };
 
+/// FUSE setattr `valid` bit for `FATTR_MODE`
+const fattr_mode: u32 = 1 << 0;
+/// FUSE setattr `valid` bit for `FATTR_UID`
+const fattr_uid: u32 = 1 << 1;
+/// FUSE setattr `valid` bit for `FATTR_GID`
+const fattr_gid: u32 = 1 << 2;
+/// FUSE setattr `valid` bit for `FATTR_SIZE`
+pub const fattr_size: u32 = 1 << 3;
+
+/// Whether a FUSE setattr mask requests ownership or mode mutation
+pub fn setattrChangesOwnershipOrMode(valid: u32) bool {
+    return (valid & (fattr_mode | fattr_uid | fattr_gid)) != 0;
+}
+
 const OpenHow = extern struct {
     flags: u64,
     mode: u64,
@@ -407,6 +421,8 @@ test "operation table denies repository writes and private directory mutations" 
     try std.testing.expectError(error.Denied, repo.createFile("new.txt"));
     try std.testing.expectError(error.Denied, repo.writeFile("a.txt", "x"));
     try std.testing.expectError(error.Denied, repo.unlinkFile("a.txt"));
+    try std.testing.expectError(error.Denied, repo.renameSameDirectory("a.txt", "b.txt"));
+    try std.testing.expectError(error.Denied, repo.linkSameDirectory("a.txt", "b.txt"));
     try std.testing.expectError(error.Denied, repo.mkdirDenied("dir"));
     try std.testing.expectError(error.Denied, cache.mkdirDenied("other"));
     try std.testing.expectError(error.Denied, cache.symlinkDenied("a", "b"));
@@ -428,6 +444,16 @@ test "operation table denies repository writes and private directory mutations" 
     try std.testing.expectEqualStrings("created-after-admission", handle_buf[0..hn]);
     try cache.closeHandle(handle);
     try std.testing.expectError(error.Denied, cache.readHandle(handle, &handle_buf));
+}
+
+test "ownership and mode setattr is distinct from size truncation" {
+    try std.testing.expect(setattrChangesOwnershipOrMode(fattr_mode));
+    try std.testing.expect(setattrChangesOwnershipOrMode(fattr_uid));
+    try std.testing.expect(setattrChangesOwnershipOrMode(fattr_gid));
+    try std.testing.expect(setattrChangesOwnershipOrMode(fattr_mode | fattr_size));
+    try std.testing.expect(!setattrChangesOwnershipOrMode(fattr_size));
+    const fattr_fh: u32 = 1 << 6;
+    try std.testing.expect(!setattrChangesOwnershipOrMode(fattr_fh));
 }
 
 test "live tree sees files created after pinning" {

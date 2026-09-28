@@ -1,8 +1,11 @@
 # Experimental fork releases
 
-The next prepared fork release is `v0.12.1-adaptivesandbox.8`. It is a GitHub-only,
+The next prepared fork release is `v0.12.1-adaptivesandbox.9`. It is a GitHub-only,
 QEMU-only prerelease for adapter development. It is not an AdaptiveSandbox-qualified
 release, and it does not unblock qualified production admission by itself.
+`v0.12.1-adaptivesandbox.8` stays at `504bb7e9f8bfda8cad0a88072529e584bc931171`
+and does not advertise `scoped-tree-runner`. `.9` advertises that profile only
+after the guest and host contract tests; qualification rows stay unverified.
 The credential-free HTTPS invocation implementation carried forward from `.5` adds
 authenticated connected-peer/TLS observations, response provenance, and bounded
 response settlement, advancing its network policy to `http-tls-mediator/v3`.
@@ -21,10 +24,16 @@ The `.7` accounting contract carried unavailable memory/PID values as null. `.8`
 requires `exec.resource-observation/v2` guest images, retains missing, malformed,
 truncated, or regressing observations as failures, and binds evidence to
 `qemu-cgroup-vfs/v3`. Its scoped tree and payload profile is a reviewed design;
-tree authority and payload-only CPU enforcement remain unimplemented.
+that tag does not advertise `scoped-tree-runner`.
 
-Create the `.8` tag only after these changes are reviewed, merged, and the exact
-main commit passes CI. Never retag a published release.
+`.9` advertises `scoped-tree-runner/v1` after tests of the operation table, root
+identity, empty environment, payload resources, and denials. Exact-file
+`scoped-runner` behavior is unchanged. The release does not qualify either
+platform or enable AdaptiveSandbox gateway admission.
+
+Create the `.9` tag only after these changes are reviewed, merged, and the exact
+main commit passes CI. Never retag a published release. Never move
+`v0.12.1-adaptivesandbox.8`.
 
 ## Prepare and publish
 
@@ -35,8 +44,8 @@ main commit passes CI. Never retag a published release.
    ```bash
    git switch main
    git pull --ff-only origin main
-   git tag -a v0.12.1-adaptivesandbox.8 -m "Experimental AdaptiveSandbox integration release"
-   git push origin v0.12.1-adaptivesandbox.8
+   git tag -a v0.12.1-adaptivesandbox.9 -m "Experimental AdaptiveSandbox integration release"
+   git push origin v0.12.1-adaptivesandbox.9
    ```
 
 3. Watch **Experimental GitHub Release** in Actions. It validates the tag, reuses
@@ -67,10 +76,10 @@ artifact removes optional krun packages and workspace lifecycle scripts. It can
 still be installed from a downloaded tarball:
 
 ```bash
-gh release download v0.12.1-adaptivesandbox.8 --repo naveed949/gondolin --dir gondolin-release
+gh release download v0.12.1-adaptivesandbox.9 --repo naveed949/gondolin --dir gondolin-release
 cd gondolin-release
 sha256sum --check SHA256SUMS
-npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.8.tgz
+npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.9.tgz
 ```
 
 On macOS, use `shasum -a 256 -c SHA256SUMS`. Install QEMU separately. The package's
@@ -82,7 +91,7 @@ image archive for a fully explicit local setup.
 
 The image registry includes an `alpine-base:latest` alias *within the fixed
 release registry*. For explicit development identity use
-`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.8`, or a digest-verified
+`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.9`, or a digest-verified
 extracted image directory. Existing local image caches and explicit overrides
 are operator state, not qualification evidence.
 

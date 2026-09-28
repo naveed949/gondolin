@@ -266,6 +266,15 @@ export class MountRouterProvider
     return resolved.provider.rename(resolved.fromPath, resolved.toPath);
   }
 
+  /** Forward ownership and mode denial to the mounted provider */
+  denyMetadataSync(entryPath: string): void {
+    const mount = this.requireMount(entryPath, "metadata");
+    const provider = mount.provider as {
+      denyMetadataSync?: (vfsPath: string) => void;
+    };
+    provider.denyMetadataSync?.(mount.relativePath);
+  }
+
   renameSync(oldPath: string, newPath: string) {
     const resolved = this.requireSameMount(oldPath, newPath, "rename");
     return resolved.provider.renameSync(resolved.fromPath, resolved.toPath);

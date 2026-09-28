@@ -713,16 +713,17 @@ See [scoped resource prerequisites](scoped-resource-prerequisites.md) for CPU
 observer failure semantics and the remaining tree-authority, resource, and
 independent teardown gaps before AdaptiveSandbox qualification.
 
-## Scoped-tree-runner v1 (unsupported)
+## Scoped-tree-runner v1
 
-`scoped-tree-runner` is a distinct future profile. Linux now pins one repository
-read root and two private write roots, resolves names with `openat2` under those
-descriptors, and enforces the accepted repository/private operation table. The
-feature manifest keeps the profile `unsupported`. Payload launch, guest ambient
-confinement, and payload-only CPU/memory/children accounting remain unimplemented.
-Adapter, callback, mount, and guest-configuration inputs cannot widen this
-foundation into an active invocation. Historical exact-file `scoped-runner`
-behavior is unchanged. See [scoped tree and payload resource profile](scoped-tree-payload-profile.md).
+`scoped-tree-runner` is a distinct profile from exact-file `scoped-runner`.
+The feature manifest advertises `scoped-tree-runner` as `active` for Linux
+live root-bound reads, private regular-file writes, empty environment, no-fork
+launch, and payload CPU/memory/children accounting. That advertisement follows
+guest and host tests of the operation table, root identity, empty environment,
+resource ceilings, and denials. It is not a qualified compatibility row.
+Generic per-invocation resource controls stay `unverified`. The AdaptiveSandbox
+capability adapter still refuses gateway admission. Historical exact-file
+`scoped-runner` behavior is unchanged. See [scoped tree and payload resource profile](scoped-tree-payload-profile.md).
 
 ## Experimental credential-free HTTPS profile
 

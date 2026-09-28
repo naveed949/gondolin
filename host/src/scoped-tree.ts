@@ -1307,7 +1307,7 @@ export class ScopedTreeRunnerInvocationContext {
     admission(
       "unsupported",
       "request.launch",
-      "scoped-tree-runner payload launch, guest ambient confinement, and payload-only resource accounting are unimplemented",
+      "this foundation session does not launch payloads; scoped-tree-runner/v1 execution is the runtime context",
     );
   }
 }

@@ -226,6 +226,96 @@ vmTest("scoped-tree-runner/v1 byte memory ceiling is enforced without MiB roundi
   assert.equal(result.resourceAccounting.limits.memoryBytes, 4 * 1024 * 1024 + 111);
 });
 
+vmTest("scoped-tree-runner/v1 stdin is empty", async () => {
+  const result = await context.invoke(request("tree-stdin", ["cat"]));
+  assert.equal(result.outcome, "success", result.error);
+  assert.equal(result.stdout, "");
+});
+
+vmTest("scoped-tree-runner/v1 output byte ceiling is host-observed payload bytes", async () => {
+  const result = await context.invoke(
+    request("tree-output", ["yes"], freshPrivate(), {
+      outputBytes: 64,
+      wallMs: 10_000,
+      cpuMs: 10_000,
+    }),
+  );
+  assert.equal(result.outcome, "output_overflow", result.error);
+  assert.equal(result.resourceAccounting.exhausted, "output");
+  assert.equal(result.resourceAccounting.observations.output, "host-exec-channel");
+  assert.equal(typeof result.resourceAccounting.usage.outputBytes, "number");
+  assert.ok(result.resourceAccounting.usage.outputBytes > 0);
+  assert.ok(result.resourceAccounting.usage.outputBytes <= 64);
+});
+
+vmTest("scoped-tree-runner/v1 wall time bounds the payload interval", async () => {
+  const result = await context.invoke(
+    request("tree-wall", ["sleep", "30"], freshPrivate(), {
+      wallMs: 400,
+      cpuMs: 30_000,
+    }),
+  );
+  assert.equal(result.outcome, "timeout", result.error);
+  assert.equal(result.resourceAccounting.exhausted, "wall-time");
+  assert.equal(result.resourceAccounting.observations.wallTime, "host-monotonic-clock");
+  assert.ok(result.evidence.resources.usage.setupMs >= 0);
+  assert.ok(result.evidence.resources.usage.teardownMs >= 0);
+});
+
+vmTest("scoped-tree-runner/v1 private same-directory rename is allowed", async () => {
+  const roots = freshPrivate();
+  fs.writeFileSync(path.join(roots.cache.hostPath, "a.txt"), "same");
+  const result = await context.invoke(
+    request("tree-rename", ["mv", "/data/cache/a.txt", "/data/cache/b.txt"], roots),
+  );
+  assert.equal(result.outcome, "success", result.error ?? result.stderr);
+});
+
+vmTest("scoped-tree-runner/v1 denies cross-directory rename, repository unlink, and chmod", async () => {
+  const crossRoots = freshPrivate();
+  fs.mkdirSync(path.join(crossRoots.cache.hostPath, "nested"));
+  fs.writeFileSync(path.join(crossRoots.cache.hostPath, "a.txt"), "cross");
+  const cross = await context.invoke(
+    request(
+      "tree-rename-cross",
+      ["mv", "/data/cache/a.txt", "/data/cache/nested/a.txt"],
+      crossRoots,
+    ),
+  );
+  assert.notEqual(cross.outcome, "success");
+  assert.ok(
+    cross.evidence.denied.some(
+      (effect) =>
+        effect.operation === "rename" || effect.capabilityPath?.includes("rename"),
+    ),
+  );
+
+  const unlink = await context.invoke(
+    request("tree-repo-unlink", ["rm", "/data/repo/source.ts"]),
+  );
+  assert.notEqual(unlink.outcome, "success");
+  assert.equal(
+    fs.readFileSync(path.join(repository, "source.ts"), "utf8"),
+    "export const answer = 42;\n",
+  );
+
+  const chmodRoots = freshPrivate();
+  const modeFile = path.join(chmodRoots.cache.hostPath, "mode.txt");
+  fs.writeFileSync(modeFile, "mode");
+  fs.chmodSync(modeFile, 0o644);
+  const chmod = await context.invoke(
+    request("tree-chmod", ["chmod", "600", "/data/cache/mode.txt"], chmodRoots),
+  );
+  assert.equal(
+    chmod.outcome,
+    "policy_denied",
+    chmod.error ?? chmod.stderr,
+  );
+  assert.ok(
+    chmod.evidence.denied.some((effect) => effect.capabilityPath?.endsWith(".metadata")),
+  );
+});
+
 vmTest("scoped-tree-runner/v1 concurrent invocations use disjoint private roots", async () => {
   const firstRoots = freshPrivate();
   const secondRoots = freshPrivate();
