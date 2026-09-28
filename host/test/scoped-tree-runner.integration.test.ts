@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   CAPABILITY_CEILING_SCHEMA_VERSION,
   CAPABILITY_INVOCATION_SCHEMA_VERSION,
+  verifyCapabilityInvocationEvidence,
 } from "../src/index.ts";
 import {
   SCOPED_TREE_RUNNER_GUARANTEES,
@@ -108,6 +109,11 @@ function vmTest(name: string, fn: () => Promise<void>) {
   test(name, { skip: skipVm, timeout: 60_000 }, fn);
 }
 
+const TEARDOWN_RESIDUAL = new Set([
+  "incomplete teardown did not determine the final outcome",
+  "successful evidence has incomplete teardown: writableStateDestroyed",
+]);
+
 vmTest("scoped-tree-runner/v1 reads the live repository tree", async () => {
   const result = await context.invoke(
     request("tree-read", ["cat", "/data/repo/source.ts"]),
@@ -123,6 +129,43 @@ vmTest("scoped-tree-runner/v1 reads the live repository tree", async () => {
   assert.equal(result.evidence.teardown.vfsHandlesRevoked, true);
   assert.equal(result.evidence.teardown.vmStopped, true);
 });
+
+vmTest(
+  "successful scoped read evidence keeps attempted and observed sequences unique",
+  async () => {
+    const result = await context.invoke(
+      request("tree-read-unique-sequence", ["cat", "/data/repo/source.ts"]),
+    );
+    assert.equal(result.outcome, "success", result.error);
+    assert.ok(result.evidence.attempted.length > 0);
+    assert.ok(result.evidence.observed.length > 0);
+    const attempted = new Set(
+      result.evidence.attempted.map((effect) => effect.sequence),
+    );
+    const observed = result.evidence.observed.map((effect) => effect.sequence);
+    assert.equal(new Set(observed).size, observed.length);
+    for (const sequence of observed) {
+      assert.equal(
+        attempted.has(sequence),
+        false,
+        `shared sequence ${sequence}`,
+      );
+    }
+    const verification = verifyCapabilityInvocationEvidence(result.evidence);
+    assert.equal(
+      verification.errors.includes("duplicate evidence event sequence"),
+      false,
+      verification.errors.join("\n"),
+    );
+    for (const error of verification.errors) {
+      assert.equal(
+        TEARDOWN_RESIDUAL.has(error),
+        true,
+        verification.errors.join("\n"),
+      );
+    }
+  },
+);
 
 vmTest("scoped-tree-runner/v1 late-creates a regular file under the private cache root", async () => {
   const result = await context.invoke(

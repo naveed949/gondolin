@@ -465,29 +465,32 @@ export class ScopedTreeRunnerInvocationContext {
         );
       }
       provider = bindScopedTreeProvider(request, (decision) => {
-        const effect: ScopedTreeRunnerFilesystemEffect = {
-          ...identity.authenticate(vmId === "not-created" ? undefined : vmId),
+        const vmBinding = vmId === "not-created" ? undefined : vmId;
+        const authenticatedFilesystemEffect = (
+          decisionKind: ScopedTreeRunnerFilesystemEffect["decision"],
+        ): ScopedTreeRunnerFilesystemEffect => ({
+          ...identity.authenticate(vmBinding),
           domain: "filesystem",
           operation: decision.operation,
           resourceId: sha256(`tree:${decision.guestPath}`),
           guestPath: decision.guestPath,
-          decision: decision.decision === "granted" ? "attempted" : "denied",
+          decision: decisionKind,
           ...(decision.capabilityPath
             ? { capabilityPath: decision.capabilityPath }
             : {}),
-        };
+        });
         if (decision.decision === "denied") {
-          denied.push({ ...effect, decision: "denied" });
+          denied.push(authenticatedFilesystemEffect("denied"));
           processEvents.push({
-            ...identity.authenticate(vmId === "not-created" ? undefined : vmId),
+            ...identity.authenticate(vmBinding),
             domain: "process",
             kind: "denial",
             detail: `host policy denied ${decision.operation} on ${decision.guestPath} at ${decision.capabilityPath}`,
             observedAt: new Date().toISOString(),
           });
         } else {
-          attempted.push(effect);
-          observed.push({ ...effect, decision: "observed" });
+          attempted.push(authenticatedFilesystemEffect("attempted"));
+          observed.push(authenticatedFilesystemEffect("observed"));
         }
       });
       try {

@@ -4,6 +4,13 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Authenticate each observed scoped-tree filesystem effect on its own
+  sequence. Attempted and observed decision kinds no longer share one
+  authenticated sequence, so a successful scoped read is not rejected for a
+  duplicate evidence event sequence. The known teardown pair is unchanged.
+  `scoped-tree-runner/v1` stays advertised and AdaptiveSandbox qualification
+  stays false.
+
 ## 0.12.1-adaptivesandbox.9
 
 - Advertise `scoped-tree-runner/v1` as `active` after guest and host tests of
