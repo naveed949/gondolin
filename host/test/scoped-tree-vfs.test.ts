@@ -26,6 +26,9 @@ import {
 } from "../src/scoped-tree-runner.ts";
 import { FsRpcService } from "../src/vfs/rpc-service.ts";
 import { ERRNO } from "../src/vfs/utils.ts";
+import { MountRouterProvider, normalizeMountMap } from "../src/vfs/mounts.ts";
+import { MemoryProvider } from "../src/vfs/node/index.ts";
+import { wrapProvider } from "../src/vfs/provider.ts";
 
 const skip = !linuxAtAvailable() ? "openat2 unavailable" : false;
 
@@ -105,7 +108,7 @@ test(
 test(
   "tree VFS enforces the per-root operation table and late creates",
   { skip },
-  () => {
+  async () => {
     const roots = makeRoots();
     const decisions: string[] = [];
     const request = {
@@ -169,6 +172,48 @@ test(
       assert.throws(
         () => provider.renameSync("/cache/renamed.bin", "/cache/nested/x.bin"),
         /ERRNO_1/,
+      );
+      fs.mkdirSync(path.join(roots.cache.hostPath, "nested"));
+      const service = new FsRpcService(provider);
+      const cacheLookup = await service.handleRequest({
+        v: 1,
+        t: "fs_request",
+        id: 1,
+        p: { op: "lookup", req: { parent_ino: 1, name: "cache" } },
+      });
+      assert.equal(cacheLookup.p.err, 0);
+      const cacheIno = (cacheLookup.p.res as { entry: { ino: number } }).entry.ino;
+      const nestedLookup = await service.handleRequest({
+        v: 1,
+        t: "fs_request",
+        id: 2,
+        p: { op: "lookup", req: { parent_ino: cacheIno, name: "nested" } },
+      });
+      assert.equal(nestedLookup.p.err, 0);
+      const nestedIno = (nestedLookup.p.res as { entry: { ino: number } }).entry.ino;
+      const crossRename = await service.handleRequest({
+        v: 1,
+        t: "fs_request",
+        id: 3,
+        p: {
+          op: "rename",
+          req: {
+            old_parent_ino: cacheIno,
+            old_name: "renamed.bin",
+            new_parent_ino: nestedIno,
+            new_name: "x.bin",
+            flags: 0,
+          },
+        },
+      });
+      assert.equal(crossRename.p.err, ERRNO.EPERM);
+      assert.equal(
+        fs.existsSync(path.join(roots.cache.hostPath, "renamed.bin")),
+        true,
+      );
+      assert.equal(
+        fs.existsSync(path.join(roots.cache.hostPath, "nested", "x.bin")),
+        false,
       );
       assert.throws(() => provider.openSync("/repo/../cache/renamed.bin", "r"), /ERRNO_1/);
       assert.ok(
@@ -274,6 +319,64 @@ test(
     const disposed = provider.dispose();
     assert.equal(disposed.rootsClosed, false);
     fs.rmSync(roots.parent, { recursive: true, force: true });
+  },
+);
+
+test(
+  "wrapped tree providers still deny ownership and mode setattr",
+  { skip },
+  async () => {
+    const roots = makeRoots();
+    const decisions: string[] = [];
+    const tree = bindScopedTreeProvider(
+      {
+        capabilities: {
+          filesystem: {
+            repository: {
+              hostPath: roots.repository,
+              guestPath: "/data/repo",
+              identity: roots.repoIdentity,
+            },
+            cache: { ...roots.cache, guestPath: "/data/cache" },
+            temp: { ...roots.temp, guestPath: "/data/tmp" },
+          },
+        },
+      } as ScopedTreeRunnerInvocationRequest,
+      (decision) => {
+        decisions.push(`${decision.decision}:${decision.capabilityPath ?? ""}`);
+      },
+    );
+    const provider = wrapProvider(
+      new MountRouterProvider(
+        normalizeMountMap({
+          "/": tree,
+          "/etc/gondolin": new MemoryProvider(),
+        }),
+      ),
+      {},
+    );
+    const service = new FsRpcService(provider);
+    try {
+      const lookup = await service.handleRequest({
+        v: 1,
+        t: "fs_request",
+        id: 1,
+        p: { op: "lookup", req: { parent_ino: 1, name: "cache" } },
+      });
+      assert.equal(lookup.p.err, 0);
+      const cacheIno = (lookup.p.res as { entry: { ino: number } }).entry.ino;
+      const metadata = await service.handleRequest({
+        v: 1,
+        t: "fs_request",
+        id: 2,
+        p: { op: "setattr_metadata", req: { ino: cacheIno } },
+      });
+      assert.equal(metadata.p.err, ERRNO.EPERM);
+      assert.ok(decisions.some((entry) => entry.includes("filesystem.cache.metadata")));
+    } finally {
+      tree.dispose();
+      fs.rmSync(roots.parent, { recursive: true, force: true });
+    }
   },
 );
 

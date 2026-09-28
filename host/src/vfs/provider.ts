@@ -442,6 +442,14 @@ export class SandboxVfsProvider
     await this.runAfter({ op: "rename", oldPath, newPath });
   }
 
+  /** Forward ownership and mode denial to the wrapped tree provider */
+  denyMetadataSync(vfsPath: string): void {
+    const backend = this.backend as {
+      denyMetadataSync?: (vfsPath: string) => void;
+    };
+    backend.denyMetadataSync?.(vfsPath);
+  }
+
   renameSync(oldPath: string, newPath: string) {
     if (this.readonly) {
       throw createErrnoError(ERRNO.EROFS, "rename", oldPath);

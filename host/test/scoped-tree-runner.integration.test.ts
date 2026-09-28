@@ -300,11 +300,17 @@ vmTest("scoped-tree-runner/v1 denies cross-directory rename, repository unlink, 
   );
 
   const chmodRoots = freshPrivate();
-  fs.writeFileSync(path.join(chmodRoots.cache.hostPath, "mode.txt"), "mode");
+  const modeFile = path.join(chmodRoots.cache.hostPath, "mode.txt");
+  fs.writeFileSync(modeFile, "mode");
+  fs.chmodSync(modeFile, 0o644);
   const chmod = await context.invoke(
     request("tree-chmod", ["chmod", "600", "/data/cache/mode.txt"], chmodRoots),
   );
-  assert.equal(chmod.outcome, "policy_denied", chmod.error ?? chmod.stderr);
+  assert.equal(
+    chmod.outcome,
+    "policy_denied",
+    chmod.error ?? chmod.stderr,
+  );
   assert.ok(
     chmod.evidence.denied.some((effect) => effect.capabilityPath?.endsWith(".metadata")),
   );

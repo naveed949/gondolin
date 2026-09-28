@@ -2000,10 +2000,13 @@ fn applyCapabilityPolicy(
         defer _ = c.close(directory_fd);
     }
 
+    // REFER is denied unless a rule grants it. Without this grant, cross-directory
+    // rename returns EXDEV before sandboxfs, and busybox mv copies then unlinks.
     const private_tree_access: u64 = c.LANDLOCK_ACCESS_FS_WRITE_FILE |
         c.LANDLOCK_ACCESS_FS_REMOVE_FILE |
         c.LANDLOCK_ACCESS_FS_MAKE_REG |
-        c.LANDLOCK_ACCESS_FS_TRUNCATE;
+        c.LANDLOCK_ACCESS_FS_TRUNCATE |
+        c.LANDLOCK_ACCESS_FS_REFER;
     for (writable_directories) |directory| {
         const directory_fd = try openPinnedDirectory(directory);
         defer _ = c.close(directory_fd);

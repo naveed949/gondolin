@@ -14,8 +14,10 @@ All notable changes to Gondolin are documented here.
 - Refuse a replaced repository, cache, or temp identity before payload launch,
   including a failed pinned-identity recheck. Claim revocation only when the
   created descriptors and private roots are closed. Deny ownership and mode
-  setattr, and repository same-directory rename or hard-link, on scoped-tree
-  roots. Exact-file setattr stays a successful no-op.
+  setattr through the mounted VFS wrapper, and repository same-directory rename
+  or hard-link, on scoped-tree roots. Grant private-tree Landlock `REFER` so a
+  cross-directory rename is denied by the operation table instead of copied
+  after `EXDEV`. Exact-file setattr stays a successful no-op.
 - Carry the Linux live root-tree foundation and `scoped-tree-runner/v1` runtime
   from main: pinned root identities, `openat2` resolution, the repository and
   private operation table, private cache/temp roots, no-fork confinement,
