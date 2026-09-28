@@ -4,6 +4,8 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.10
+
 - Authenticate each observed scoped-tree filesystem effect on its own
   sequence. Attempted and observed decision kinds no longer share one
   authenticated sequence, so a successful scoped read is not rejected for a

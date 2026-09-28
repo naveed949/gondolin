@@ -1,11 +1,16 @@
 # Experimental fork releases
 
-The next prepared fork release is `v0.12.1-adaptivesandbox.9`. It is a GitHub-only,
+The next prepared fork release is `v0.12.1-adaptivesandbox.10`. It is a GitHub-only,
 QEMU-only prerelease for adapter development. It is not an AdaptiveSandbox-qualified
 release, and it does not unblock qualified production admission by itself.
+`v0.12.1-adaptivesandbox.9` stays at `d367a3b276d1a207e68cc7f703df5e634a84b841`.
 `v0.12.1-adaptivesandbox.8` stays at `504bb7e9f8bfda8cad0a88072529e584bc931171`
-and does not advertise `scoped-tree-runner`. `.9` advertises that profile only
-after the guest and host contract tests; qualification rows stay unverified.
+and does not advertise `scoped-tree-runner`. Never retag `.8` or `.9`. `.9`
+advertises `scoped-tree-runner/v1` only after the guest and host contract tests;
+qualification rows stay unverified. `.10` authenticates each observed scoped-tree
+filesystem effect on its own sequence. Attempted and observed sequences stay
+unique. `scoped-tree-runner/v1` stays advertised. This release is not
+qualification.
 The credential-free HTTPS invocation implementation carried forward from `.5` adds
 authenticated connected-peer/TLS observations, response provenance, and bounded
 response settlement, advancing its network policy to `http-tls-mediator/v3`.
@@ -28,12 +33,19 @@ that tag does not advertise `scoped-tree-runner`.
 
 `.9` advertises `scoped-tree-runner/v1` after tests of the operation table, root
 identity, empty environment, payload resources, and denials. Exact-file
-`scoped-runner` behavior is unchanged. The release does not qualify either
+`scoped-runner` behavior is unchanged. That release stays at
+`d367a3b276d1a207e68cc7f703df5e634a84b841` and does not qualify either
 platform or enable AdaptiveSandbox gateway admission.
 
-Create the `.9` tag only after these changes are reviewed, merged, and the exact
+`.10` authenticates each observed scoped-tree filesystem effect on its own
+sequence so attempted and observed decision kinds do not share one. A successful
+scoped read is not rejected for a duplicate evidence event sequence. The known
+teardown pair is unchanged. `scoped-tree-runner/v1` stays advertised and
+`adaptiveSandboxQualified` stays false.
+
+Create the `.10` tag only after these changes are reviewed, merged, and the exact
 main commit passes CI. Never retag a published release. Never move
-`v0.12.1-adaptivesandbox.8`.
+`v0.12.1-adaptivesandbox.8` or `v0.12.1-adaptivesandbox.9`.
 
 ## Prepare and publish
 
@@ -44,8 +56,8 @@ main commit passes CI. Never retag a published release. Never move
    ```bash
    git switch main
    git pull --ff-only origin main
-   git tag -a v0.12.1-adaptivesandbox.9 -m "Experimental AdaptiveSandbox integration release"
-   git push origin v0.12.1-adaptivesandbox.9
+   git tag -a v0.12.1-adaptivesandbox.10 -m "Experimental AdaptiveSandbox integration release"
+   git push origin v0.12.1-adaptivesandbox.10
    ```
 
 3. Watch **Experimental GitHub Release** in Actions. It validates the tag, reuses
@@ -76,10 +88,10 @@ artifact removes optional krun packages and workspace lifecycle scripts. It can
 still be installed from a downloaded tarball:
 
 ```bash
-gh release download v0.12.1-adaptivesandbox.9 --repo naveed949/gondolin --dir gondolin-release
+gh release download v0.12.1-adaptivesandbox.10 --repo naveed949/gondolin --dir gondolin-release
 cd gondolin-release
 sha256sum --check SHA256SUMS
-npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.9.tgz
+npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.10.tgz
 ```
 
 On macOS, use `shasum -a 256 -c SHA256SUMS`. Install QEMU separately. The package's
@@ -91,7 +103,7 @@ image archive for a fully explicit local setup.
 
 The image registry includes an `alpine-base:latest` alias *within the fixed
 release registry*. For explicit development identity use
-`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.9`, or a digest-verified
+`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.10`, or a digest-verified
 extracted image directory. Existing local image caches and explicit overrides
 are operator state, not qualification evidence.
 
