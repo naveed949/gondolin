@@ -1,0 +1,19 @@
+node=v24.21.0
+node_path=/home/ubuntu/.nvm/versions/node/v24.21.0/bin/node
+qemu=qemu-system-x86_64
+qemu_path=/usr/bin/qemu-system-x86_64
+host_arch=x86_64
+accel=tcg
+gondolin_bin=/workspace/host/dist/bin/gondolin.js
+package_version=0.12.1-adaptivesandbox.10
+image_store=/home/ubuntu/.cache/gondolin/images
+image_ls=alpine-base:latest  x86_64=67109111-44a5-5c07-b5a5-b3a6f136e027
+image_ref=alpine-base:latest
+image_arch=x86_64
+sessions_dir=/tmp/gondolin-verify-20260929T060413Z-6135/sessions
+shared_sessions_dir=/home/ubuntu/.cache/gondolin/sessions
+sessions_live=0
+checkpoint_dir=/tmp/gondolin-verify-20260929T060413Z-6135/checkpoints
+verify_root=/tmp/gondolin-verify-20260929T060413Z-6135
+verify_run_id=20260929T060413Z-6135
+status=ready

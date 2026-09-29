@@ -1,0 +1,10 @@
+verify_run_id=20260929T060413Z-6135
+sessions_dir=/tmp/gondolin-verify-20260929T060413Z-6135/sessions
+checkpoint_dir=/tmp/gondolin-verify-20260929T060413Z-6135/checkpoints
+workspace=/tmp/gondolin-verify-20260929T060413Z-6135/workspace
+node=v24.21.0
+node_path=/home/ubuntu/.nvm/versions/node/v24.21.0/bin/node
+host_arch=x86_64
+accel=tcg
+start_timeout_ms=300000
+qemu=qemu-system-x86_64

@@ -30,7 +30,7 @@ If `command -v node` is older than 23.6.0, install Node 24 (or any 23.6+) and pr
 
 When `/dev/kvm` is not readable and writable, launch exports `GONDOLIN_START_TIMEOUT_MS=300000` unless it is already set. QEMU then uses TCG. The code default without that variable is `120000` ms (`GONDOLIN_START_TIMEOUT_MS` in `host/src/vm/core.ts`).
 
-The first `image pull` downloads the alpine-base archive for this arch (hundreds of MB) into the shared image store. Later launches reuse that store. Launch does not point `GONDOLIN_IMAGE_STORE` at the verify root.
+The first `image pull` downloads the alpine-base archive for this arch into the shared image store. For package `0.12.1-adaptivesandbox.10` the x86_64 archive is about 925 MB compressed. Later launches reuse that store. Launch does not point `GONDOLIN_IMAGE_STORE` at the verify root.
 
 ## Doctor
 
