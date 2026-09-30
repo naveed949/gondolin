@@ -36,8 +36,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      # The default Actions token cannot read private naveed949/AdaptiveSandbox.
+      # qualify-if-pinned downloads that release and fails closed without access.
       - name: Verify AdaptiveSandbox pin and compatibility matrix
-        run: node scripts/run-adaptivesandbox-conformance.mjs qualify-if-pinned
+        run: node scripts/run-adaptivesandbox-conformance.mjs check
 
       - name: Test fork release packaging
         run: node --test scripts/package-fork-release.test.mjs

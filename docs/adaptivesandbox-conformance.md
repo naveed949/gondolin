@@ -42,13 +42,15 @@ is strict and fail closed. The reviewed pin provides:
 - a fixed Node invocation containing `{artifact}`, `{adapter}`, and `{report}`
   placeholders.
 
-CI downloads and runs a bundle only after that pin becomes `pinned`. It hashes
-the bytes before execution and rejects substitution. AdaptiveSandbox is private,
-so an anonymous fetch of the asset URL returns HTTP 404. When `GH_TOKEN`,
-`GITHUB_TOKEN`, or `gh auth token` is present, the runner sends that value as a
-Bearer token on the GitHub download and does not print it. A 401 or 404 still
-fails closed. A manually forced qualification fails while the pin is
-unavailable:
+`check` validates the pin and matrix and does not download the bundle. GitHub
+Actions runs `check` because the repository's default `GITHUB_TOKEN` cannot read
+private `naveed949/AdaptiveSandbox`. `qualify` and `qualify-if-pinned` download
+the asset, hash the bytes before execution, and reject substitution.
+AdaptiveSandbox is private, so an anonymous fetch of the asset URL returns HTTP
+404. When `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token` can read that
+repository, the runner sends the value as a Bearer token on the GitHub download
+and does not print it. A 401 or 404 still fails closed. A manually forced
+qualification fails while the pin is unavailable:
 
 ```bash
 npm run conformance:check
@@ -56,8 +58,8 @@ npm run conformance:ci
 npm run conformance:qualify
 ```
 
-`conformance:ci` checks the pin and matrix now and automatically performs the
-same integrity-pinned qualification when a release pin is configured.
+`conformance:ci` attempts that download whenever the pin is `pinned`. It does
+not run in GitHub Actions.
 
 ## Capability adapter protocol
 
@@ -116,13 +118,13 @@ identities, stale manifests, runtime substitution, and premature teardown.
 Reports publish security pass/fail/skip counts, allowed-fixture false denials
 and rate, plus separate p50/p95 latency for cold boot, invocation setup, policy
 installation, execution, observation, verification, and teardown for reader,
-writer, and runner workloads. `not-run-no-released-bundle` remains the summary
-for Windows and libkrun rows, which do not claim this bundle. QEMU rows that
-name the pinned bundle use `unverified-pinned-bundle-http-tls-credential-skipped`:
-zero workload samples, security counts `{passed: 0, failed: 13, skipped: 2}`
-from the published fail-closed run (http-tls and credential skipped), and
-`unverified` status. That summary is not a per-host measurement and does not
-promote any row.
+writer, and runner workloads. The Linux x64 QEMU row names the pinned bundle and
+uses `unverified-pinned-bundle-http-tls-credential-skipped`: zero workload
+samples, security counts `{passed: 0, failed: 13, skipped: 2}` from the
+published fail-closed run (http-tls and credential skipped), and `unverified`
+status. That summary is not a live measurement of this repository's adapter.
+Other QEMU hosts, Windows, and libkrun do not claim the bundle result.
+`not-run-no-released-bundle` remains their summary. No row is verified.
 
 Procedure-generated operation compatibility stays `unverified` until a
 released AdaptiveSandbox issue #24 conformance artifact proves every effect

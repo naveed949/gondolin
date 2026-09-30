@@ -191,31 +191,40 @@ test("checked pin and machine-readable matrix are fail-closed", () => {
     ),
     true,
   );
-  const linux = matrix.rows.find(
+  const linuxQemuX64 = matrix.rows.find(
     (row) =>
       row.identity.vmm === "qemu" &&
       row.identity.hostPlatform === "linux" &&
       row.identity.hostArchitecture === "x64",
   );
-  assert.equal(linux?.status, "unverified");
-  assert.equal(linux?.identity.gondolinVersion, "0.12.1-adaptivesandbox.10");
+  assert.equal(linuxQemuX64?.status, "unverified");
   assert.equal(
-    linux?.identity.adaptiveSandboxBundleVersion,
+    linuxQemuX64?.identity.gondolinVersion,
+    "0.12.1-adaptivesandbox.10",
+  );
+  assert.equal(
+    linuxQemuX64?.identity.adaptiveSandboxBundleVersion,
     pin.bundleVersion,
   );
   assert.equal(
-    linux?.identity.adaptiveSandboxBundleDigest,
+    linuxQemuX64?.identity.adaptiveSandboxBundleDigest,
     pin.artifact.sha256,
   );
   assert.equal(
-    linux?.identity.featureManifestDigest,
+    linuxQemuX64?.identity.featureManifestDigest,
     capabilityFeatureManifestDigest(getCapabilityInvocationFeatureManifest()),
   );
-  assert.equal(linux?.identity.policyVersionsDigest, null);
-  assert.equal(linux?.identity.qemu, null);
-  assert.equal(linux?.identity.guestImageDigest, null);
-  assert.equal(linux?.identity.guestKernelDigest, null);
-  const summary = matrix.reports[linux?.report ?? ""];
+  assert.equal(linuxQemuX64?.identity.policyVersionsDigest, null);
+  assert.equal(linuxQemuX64?.identity.qemu, null);
+  assert.equal(linuxQemuX64?.identity.guestImageDigest, null);
+  assert.equal(linuxQemuX64?.identity.guestKernelDigest, null);
+  assert.equal(
+    matrix.rows.filter(
+      (row) => row.identity.adaptiveSandboxBundleVersion !== null,
+    ).length,
+    1,
+  );
+  const summary = matrix.reports[linuxQemuX64?.report ?? ""];
   assert.deepEqual(summary?.security, { passed: 0, failed: 13, skipped: 2 });
   assert.deepEqual(summary?.falseDenials, {
     allowedFixtures: 0,

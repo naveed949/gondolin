@@ -157,19 +157,10 @@ async function githubReleaseToken(url) {
     return null;
   }
   if (!parsed.pathname.includes("/releases/download/")) return null;
-  const fromEnv = firstNonEmpty(
-    process.env.GH_TOKEN,
-    process.env.GITHUB_TOKEN,
-  );
-  if (fromEnv) return fromEnv;
-  return await ghCliToken();
-}
-
-function firstNonEmpty(...values) {
-  for (const value of values) {
+  for (const value of [process.env.GH_TOKEN, process.env.GITHUB_TOKEN]) {
     if (typeof value === "string" && value.trim().length > 0) return value.trim();
   }
-  return null;
+  return await ghCliToken();
 }
 
 function ghCliToken() {

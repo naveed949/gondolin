@@ -117,15 +117,15 @@
       "report": "unverified-pinned-bundle-http-tls-credential-skipped"
     },
     {
-      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-0.1.0-conformance.2-qemu-unpinned-linux-arm64-aarch64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-linux-arm64-aarch64",
       "identity": {
         "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
-        "featureManifestDigest": "sha256:df5e6b5c5685e07dedaa1c8fc0fda3f4271b75c1e7d33d2205d3d14220dbf7f0",
+        "featureManifestDigest": null,
         "policyVersionsDigest": null,
-        "adaptiveSandboxBundleVersion": "0.1.0-conformance.2",
-        "adaptiveSandboxBundleDigest": "sha256:063c45fb03762fe86a7bf61afc01a216e77984286394a443652abd11ff1214e9",
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
         "vmm": "qemu",
         "qemu": null,
         "guestImageDigest": null,
@@ -136,19 +136,19 @@
       },
       "status": "unverified",
       "procedureGeneratedOperations": "unverified",
-      "reason": "Pinned AdaptiveSandbox bundle 0.1.0-conformance.2 is unverified. Recorded security counts are the published fail-closed run, with http-tls and credential skipped. QEMU executable, image, and kernel identities are unmeasured.",
-      "report": "unverified-pinned-bundle-http-tls-credential-skipped"
+      "reason": "Pinned AdaptiveSandbox bundle 0.1.0-conformance.2 has no recorded result for this host. QEMU executable, image, and kernel identities are unmeasured.",
+      "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-0.1.0-conformance.2-qemu-unpinned-darwin-arm64-aarch64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-arm64-aarch64",
       "identity": {
         "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
-        "featureManifestDigest": "sha256:df5e6b5c5685e07dedaa1c8fc0fda3f4271b75c1e7d33d2205d3d14220dbf7f0",
+        "featureManifestDigest": null,
         "policyVersionsDigest": null,
-        "adaptiveSandboxBundleVersion": "0.1.0-conformance.2",
-        "adaptiveSandboxBundleDigest": "sha256:063c45fb03762fe86a7bf61afc01a216e77984286394a443652abd11ff1214e9",
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
         "vmm": "qemu",
         "qemu": null,
         "guestImageDigest": null,
@@ -159,19 +159,19 @@
       },
       "status": "unverified",
       "procedureGeneratedOperations": "unverified",
-      "reason": "macOS is a separate host qualification path. It shares the published fail-closed summary for pinned bundle 0.1.0-conformance.2 and is not itself a macOS measurement. QEMU executable, image, and kernel identities are unmeasured.",
-      "report": "unverified-pinned-bundle-http-tls-credential-skipped"
+      "reason": "macOS is a separate host qualification path and has no recorded result for pinned bundle 0.1.0-conformance.2.",
+      "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-0.1.0-conformance.2-qemu-unpinned-darwin-x64-x86_64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-x64-x86_64",
       "identity": {
         "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
-        "featureManifestDigest": "sha256:df5e6b5c5685e07dedaa1c8fc0fda3f4271b75c1e7d33d2205d3d14220dbf7f0",
+        "featureManifestDigest": null,
         "policyVersionsDigest": null,
-        "adaptiveSandboxBundleVersion": "0.1.0-conformance.2",
-        "adaptiveSandboxBundleDigest": "sha256:063c45fb03762fe86a7bf61afc01a216e77984286394a443652abd11ff1214e9",
+        "adaptiveSandboxBundleVersion": null,
+        "adaptiveSandboxBundleDigest": null,
         "vmm": "qemu",
         "qemu": null,
         "guestImageDigest": null,
@@ -182,8 +182,8 @@
       },
       "status": "unverified",
       "procedureGeneratedOperations": "unverified",
-      "reason": "macOS is a separate host qualification path. It shares the published fail-closed summary for pinned bundle 0.1.0-conformance.2 and is not itself a macOS measurement. QEMU executable, image, and kernel identities are unmeasured.",
-      "report": "unverified-pinned-bundle-http-tls-credential-skipped"
+      "reason": "macOS is a separate host qualification path and has no recorded result for pinned bundle 0.1.0-conformance.2.",
+      "report": "not-run-no-released-bundle"
     },
     {
       "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-win32-x64-x86_64",
