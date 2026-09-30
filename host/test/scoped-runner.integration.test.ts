@@ -359,13 +359,13 @@ test(
       {
         name: "memory",
         invocationId: "runner-resource-memory",
-        // Doubling crosses memory.max before host QEMU CPU, summed across
-        // threads, can spend the CPU budget. A `yes | head` filler has lost
-        // that race on multi-core runners and aborted as cpu_exhausted.
+        // Heap doubling reaches the 128 MiB admission floor before summed
+        // host QEMU CPU can spend a 60s budget. A `yes | head` filler stays
+        // CPU-saturated and has aborted as cpu_exhausted on multi-core CI.
         script: "x=x; while :; do x=$x$x; done",
         limits: {
           cpuTimeMs: 60_000,
-          memoryBytes: 32 * 1024 * 1024,
+          memoryBytes: 128 * 1024 * 1024,
           wallTimeMs: 30_000,
         },
         outcome: "memory_exhausted",
