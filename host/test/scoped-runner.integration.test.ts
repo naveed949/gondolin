@@ -359,10 +359,12 @@ test(
       {
         name: "memory",
         invocationId: "runner-resource-memory",
-        script:
-          "payload=$(/bin/busybox yes x | /bin/busybox head -c 268435456); printf '%s' \"${#payload}\"",
+        // Heap doubling reaches the 128 MiB admission floor before summed
+        // host QEMU CPU can spend a 60s budget. A `yes | head` filler stays
+        // CPU-saturated and has aborted as cpu_exhausted on multi-core CI.
+        script: "x=x; while :; do x=$x$x; done",
         limits: {
-          cpuTimeMs: 30_000,
+          cpuTimeMs: 60_000,
           memoryBytes: 128 * 1024 * 1024,
           wallTimeMs: 30_000,
         },

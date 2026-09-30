@@ -12,6 +12,8 @@ import {
   CAPABILITY_INVOCATION_SCHEMA_VERSION,
   QUALIFICATION_LATENCY_PHASES,
   REQUIRED_ADAPTIVESANDBOX_FIXTURE_CATEGORIES,
+  capabilityFeatureManifestDigest,
+  getCapabilityInvocationFeatureManifest,
   parseAdaptiveSandboxCompatibilityMatrix,
   parseAdaptiveSandboxConformancePin,
   parseAdaptiveSandboxQualificationReport,
@@ -140,7 +142,28 @@ function verifiedReport(pin = pinned()): AdaptiveSandboxQualificationReport {
 
 test("checked pin and machine-readable matrix are fail-closed", () => {
   const pin = parseAdaptiveSandboxConformancePin(checkedPin);
-  assert.equal(pin.status, "unavailable");
+  assert.equal(pin.status, "pinned");
+  if (pin.status !== "pinned") return;
+  assert.equal(pin.repository, "naveed949/AdaptiveSandbox");
+  assert.equal(pin.releaseTag, "v0.1.0-conformance.2");
+  assert.equal(pin.bundleVersion, "0.1.0-conformance.2");
+  assert.equal(
+    pin.artifact.url,
+    "https://github.com/naveed949/AdaptiveSandbox/releases/download/v0.1.0-conformance.2/adaptive-sandbox-conformance-0.1.0-conformance.2.mjs",
+  );
+  assert.equal(
+    pin.artifact.sha256,
+    "sha256:063c45fb03762fe86a7bf61afc01a216e77984286394a443652abd11ff1214e9",
+  );
+  assert.equal(pin.artifact.mediaType, "text/javascript");
+  assert.equal(pin.execution.runtime, "node");
+  assert.deepEqual(pin.execution.arguments, [
+    "{artifact}",
+    "--adapter",
+    "{adapter}",
+    "--report",
+    "{report}",
+  ]);
   const matrix = parseAdaptiveSandboxCompatibilityMatrix(checkedMatrix, pin);
   assert.equal(matrix.schemaVersion, ADAPTIVESANDBOX_MATRIX_SCHEMA_VERSION);
   assert.equal(
@@ -154,7 +177,12 @@ test("checked pin and machine-readable matrix are fail-closed", () => {
   assert.equal(
     matrix.rows
       .filter((row) => row.identity.vmm === "krun")
-      .every((row) => row.status === "unverified"),
+      .every(
+        (row) =>
+          row.status === "unverified" &&
+          row.identity.adaptiveSandboxBundleVersion === null &&
+          row.identity.adaptiveSandboxBundleDigest === null,
+      ),
     true,
   );
   assert.equal(
@@ -163,6 +191,47 @@ test("checked pin and machine-readable matrix are fail-closed", () => {
     ),
     true,
   );
+  const linuxQemuX64 = matrix.rows.find(
+    (row) =>
+      row.identity.vmm === "qemu" &&
+      row.identity.hostPlatform === "linux" &&
+      row.identity.hostArchitecture === "x64",
+  );
+  assert.equal(linuxQemuX64?.status, "unverified");
+  assert.equal(
+    linuxQemuX64?.identity.gondolinVersion,
+    "0.12.1-adaptivesandbox.10",
+  );
+  assert.equal(
+    linuxQemuX64?.identity.adaptiveSandboxBundleVersion,
+    pin.bundleVersion,
+  );
+  assert.equal(
+    linuxQemuX64?.identity.adaptiveSandboxBundleDigest,
+    pin.artifact.sha256,
+  );
+  assert.equal(
+    linuxQemuX64?.identity.featureManifestDigest,
+    capabilityFeatureManifestDigest(getCapabilityInvocationFeatureManifest()),
+  );
+  assert.equal(linuxQemuX64?.identity.policyVersionsDigest, null);
+  assert.equal(linuxQemuX64?.identity.qemu, null);
+  assert.equal(linuxQemuX64?.identity.guestImageDigest, null);
+  assert.equal(linuxQemuX64?.identity.guestKernelDigest, null);
+  assert.equal(
+    matrix.rows.filter(
+      (row) => row.identity.adaptiveSandboxBundleVersion !== null,
+    ).length,
+    1,
+  );
+  const summary = matrix.reports[linuxQemuX64?.report ?? ""];
+  assert.deepEqual(summary?.security, { passed: 0, failed: 13, skipped: 2 });
+  assert.deepEqual(summary?.falseDenials, {
+    allowedFixtures: 0,
+    denied: 0,
+    rate: null,
+  });
+  assert.equal(summary?.workloads["exact-reader"].samples, 0);
 });
 
 test("release pins reject floating, latest, malformed, and changed artifacts", () => {
@@ -185,6 +254,16 @@ test("release pins reject floating, latest, malformed, and changed artifacts", (
   );
   assert.throws(
     () => verifyAdaptiveSandboxBundle(bytes, checkedPin),
+    /integrity mismatch/,
+  );
+  assert.throws(
+    () =>
+      verifyAdaptiveSandboxBundle(bytes, {
+        schemaVersion: ADAPTIVESANDBOX_PIN_SCHEMA_VERSION,
+        status: "unavailable",
+        repository: "naveed949/AdaptiveSandbox",
+        reason: "no released bundle",
+      }),
     /no released AdaptiveSandbox conformance bundle is pinned/,
   );
 });
@@ -290,8 +369,18 @@ test("matrix cannot turn absent or unsupported qualifications into claims", () =
   ) as AdaptiveSandboxCompatibilityMatrix;
   claimed.rows[0]!.status = "verified";
   assert.throws(
-    () => parseAdaptiveSandboxCompatibilityMatrix(claimed, checkedPin),
+    () =>
+      parseAdaptiveSandboxCompatibilityMatrix(claimed, {
+        schemaVersion: ADAPTIVESANDBOX_PIN_SCHEMA_VERSION,
+        status: "unavailable",
+        repository: "naveed949/AdaptiveSandbox",
+        reason: "no released bundle",
+      }),
     /cannot be verified without a pinned released bundle/,
+  );
+  assert.throws(
+    () => parseAdaptiveSandboxCompatibilityMatrix(claimed, checkedPin),
+    /verified qualification requires every exact runtime identity/,
   );
 
   const procedure = structuredClone(

@@ -52,13 +52,7 @@ try {
 }
 
 async function qualify(pin, matrix) {
-  const response = await fetch(pin.artifact.url, { redirect: "follow" });
-  if (!response.ok) {
-    throw new Error(
-      `failed to fetch pinned AdaptiveSandbox bundle: HTTP ${response.status}`,
-    );
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await fetchPinnedBundle(pin.artifact.url);
   verifyAdaptiveSandboxBundle(bytes, pin);
 
   const temporary = fs.mkdtempSync(
@@ -135,6 +129,57 @@ function printState(pin, matrix) {
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+async function fetchPinnedBundle(url) {
+  const headers = { Accept: "application/octet-stream" };
+  const token = await githubReleaseToken(url);
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(url, { headers, redirect: "follow" });
+  if (!response.ok) {
+    const mode = token ? "authenticated" : "anonymous";
+    throw new Error(
+      `failed to fetch pinned AdaptiveSandbox bundle: HTTP ${response.status} (${mode} request)`,
+    );
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/** Bearer token for a private GitHub release asset, never logged */
+async function githubReleaseToken(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
+    return null;
+  }
+  if (!parsed.pathname.includes("/releases/download/")) return null;
+  for (const value of [process.env.GH_TOKEN, process.env.GITHUB_TOKEN]) {
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return await ghCliToken();
+}
+
+function ghCliToken() {
+  return new Promise((resolve) => {
+    const child = spawn("gh", ["auth", "token"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const chunks = [];
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    child.once("error", () => resolve(null));
+    child.once("exit", (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      const token = Buffer.concat(chunks).toString("utf8").trim();
+      resolve(token.length > 0 ? token : null);
+    });
+  });
 }
 
 async function run(executable, arguments_) {

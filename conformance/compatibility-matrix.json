@@ -1,6 +1,6 @@
 {
   "schemaVersion": "gondolin.adaptivesandbox-compatibility-matrix/v1",
-  "generatedAt": "2026-09-04T00:00:00.000Z",
+  "generatedAt": "2026-09-30T07:30:00.000Z",
   "source": {
     "prd": "https://github.com/naveed949/gondolin/issues/1",
     "ticket": "https://github.com/naveed949/gondolin/issues/9",
@@ -48,19 +48,61 @@
       },
       "security": { "passed": 0, "failed": 0, "skipped": 15 },
       "falseDenials": { "allowedFixtures": 0, "denied": 0, "rate": null }
+    },
+    "unverified-pinned-bundle-http-tls-credential-skipped": {
+      "workloads": {
+        "exact-reader": {
+          "samples": 0,
+          "phases": {
+            "coldBootMs": { "samples": 0, "p50": null, "p95": null },
+            "invocationSetupMs": { "samples": 0, "p50": null, "p95": null },
+            "policyInstallationMs": { "samples": 0, "p50": null, "p95": null },
+            "executionMs": { "samples": 0, "p50": null, "p95": null },
+            "observationMs": { "samples": 0, "p50": null, "p95": null },
+            "verificationMs": { "samples": 0, "p50": null, "p95": null },
+            "teardownMs": { "samples": 0, "p50": null, "p95": null }
+          }
+        },
+        "exact-writer": {
+          "samples": 0,
+          "phases": {
+            "coldBootMs": { "samples": 0, "p50": null, "p95": null },
+            "invocationSetupMs": { "samples": 0, "p50": null, "p95": null },
+            "policyInstallationMs": { "samples": 0, "p50": null, "p95": null },
+            "executionMs": { "samples": 0, "p50": null, "p95": null },
+            "observationMs": { "samples": 0, "p50": null, "p95": null },
+            "verificationMs": { "samples": 0, "p50": null, "p95": null },
+            "teardownMs": { "samples": 0, "p50": null, "p95": null }
+          }
+        },
+        "scoped-runner": {
+          "samples": 0,
+          "phases": {
+            "coldBootMs": { "samples": 0, "p50": null, "p95": null },
+            "invocationSetupMs": { "samples": 0, "p50": null, "p95": null },
+            "policyInstallationMs": { "samples": 0, "p50": null, "p95": null },
+            "executionMs": { "samples": 0, "p50": null, "p95": null },
+            "observationMs": { "samples": 0, "p50": null, "p95": null },
+            "verificationMs": { "samples": 0, "p50": null, "p95": null },
+            "teardownMs": { "samples": 0, "p50": null, "p95": null }
+          }
+        }
+      },
+      "security": { "passed": 0, "failed": 13, "skipped": 2 },
+      "falseDenials": { "allowedFixtures": 0, "denied": 0, "rate": null }
     }
   },
   "rows": [
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-linux-x64-x86_64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-0.1.0-conformance.2-qemu-unpinned-linux-x64-x86_64",
       "identity": {
-        "gondolinVersion": "0.12.0",
+        "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
-        "featureManifestDigest": null,
+        "featureManifestDigest": "sha256:df5e6b5c5685e07dedaa1c8fc0fda3f4271b75c1e7d33d2205d3d14220dbf7f0",
         "policyVersionsDigest": null,
-        "adaptiveSandboxBundleVersion": null,
-        "adaptiveSandboxBundleDigest": null,
+        "adaptiveSandboxBundleVersion": "0.1.0-conformance.2",
+        "adaptiveSandboxBundleDigest": "sha256:063c45fb03762fe86a7bf61afc01a216e77984286394a443652abd11ff1214e9",
         "vmm": "qemu",
         "qemu": null,
         "guestImageDigest": null,
@@ -71,13 +113,13 @@
       },
       "status": "unverified",
       "procedureGeneratedOperations": "unverified",
-      "reason": "No released integrity-pinned AdaptiveSandbox bundle, QEMU executable, image, or kernel combination has been qualified.",
-      "report": "not-run-no-released-bundle"
+      "reason": "Pinned AdaptiveSandbox bundle 0.1.0-conformance.2 is unverified. Recorded security counts are the published fail-closed run, with http-tls and credential skipped. QEMU executable, image, and kernel identities are unmeasured.",
+      "report": "unverified-pinned-bundle-http-tls-credential-skipped"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-linux-arm64-aarch64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-linux-arm64-aarch64",
       "identity": {
-        "gondolinVersion": "0.12.0",
+        "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
@@ -94,13 +136,13 @@
       },
       "status": "unverified",
       "procedureGeneratedOperations": "unverified",
-      "reason": "No released integrity-pinned AdaptiveSandbox bundle, QEMU executable, image, or kernel combination has been qualified.",
+      "reason": "Pinned AdaptiveSandbox bundle 0.1.0-conformance.2 has no recorded result for this host. QEMU executable, image, and kernel identities are unmeasured.",
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-arm64-aarch64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-arm64-aarch64",
       "identity": {
-        "gondolinVersion": "0.12.0",
+        "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
@@ -117,13 +159,13 @@
       },
       "status": "unverified",
       "procedureGeneratedOperations": "unverified",
-      "reason": "macOS is a separate host qualification path and has no released bundle result.",
+      "reason": "macOS is a separate host qualification path and has no recorded result for pinned bundle 0.1.0-conformance.2.",
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-x64-x86_64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-darwin-x64-x86_64",
       "identity": {
-        "gondolinVersion": "0.12.0",
+        "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
@@ -140,13 +182,13 @@
       },
       "status": "unverified",
       "procedureGeneratedOperations": "unverified",
-      "reason": "macOS is a separate host qualification path and has no released bundle result.",
+      "reason": "macOS is a separate host qualification path and has no recorded result for pinned bundle 0.1.0-conformance.2.",
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-win32-x64-x86_64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-qemu-unpinned-win32-x64-x86_64",
       "identity": {
-        "gondolinVersion": "0.12.0",
+        "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
@@ -167,9 +209,9 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-krun-linux-x64-x86_64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-krun-linux-x64-x86_64",
       "identity": {
-        "gondolinVersion": "0.12.0",
+        "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
@@ -190,9 +232,9 @@
       "report": "not-run-no-released-bundle"
     },
     {
-      "id": "gondolin-0.12.0-capability-v1-evidence-v3-bundle-unreleased-krun-darwin-arm64-aarch64",
+      "id": "gondolin-0.12.1-adaptivesandbox.10-capability-v1-evidence-v3-bundle-unreleased-krun-darwin-arm64-aarch64",
       "identity": {
-        "gondolinVersion": "0.12.0",
+        "gondolinVersion": "0.12.1-adaptivesandbox.10",
         "capabilitySchemaVersion": "gondolin.capability-invocation/v1",
         "evidenceSchemaVersion": "gondolin.capability-evidence/v3",
         "featureManifestDigest": null,
