@@ -22,6 +22,7 @@ import {
   verifyControlledExecutionLink,
   type AdaptiveSandboxCompatibilityMatrix,
   type AdaptiveSandboxConformancePin,
+  type AdaptiveSandboxFixtureCategory,
   type AdaptiveSandboxQualificationReport,
   type QualificationSample,
 } from "../src/index.ts";
@@ -503,3 +504,78 @@ test("controlled execution links distinct principals and fresh sandboxes only", 
     /disjoint declared authority/,
   );
 });
+
+test("http-tls and credential skips cannot verify the pinned conformance bundle", () => {
+  const pin = parseAdaptiveSandboxConformancePin(checkedPin);
+  assert.equal(pin.status, "pinned");
+  if (pin.status !== "pinned") return;
+
+  const matrix = parseAdaptiveSandboxCompatibilityMatrix(checkedMatrix, pin);
+  const linuxQemuX64 = matrix.rows.find(
+    (row) =>
+      row.identity.vmm === "qemu" &&
+      row.identity.hostPlatform === "linux" &&
+      row.identity.hostArchitecture === "x64",
+  );
+  assert.equal(linuxQemuX64?.status, "unverified");
+  assert.equal(
+    linuxQemuX64?.report,
+    "unverified-pinned-bundle-http-tls-credential-skipped",
+  );
+  assert.match(linuxQemuX64?.reason ?? "", /http-tls and credential skipped/);
+
+  const held = skipFixtures(verifiedReport(pin), ["http-tls", "credential"]);
+  held.status = "unverified";
+  assert.equal(
+    parseAdaptiveSandboxQualificationReport(held, pin).status,
+    "unverified",
+  );
+  const claimed = skipFixtures(verifiedReport(pin), ["http-tls", "credential"]);
+  claimed.status = "verified";
+  assert.throws(
+    () => parseAdaptiveSandboxQualificationReport(claimed, pin),
+    /failed or skipped fixtures/,
+  );
+  for (const category of ["http-tls", "credential"] as const) {
+    const oneSkip = skipFixtures(verifiedReport(pin), [category]);
+    oneSkip.status = "verified";
+    assert.throws(
+      () => parseAdaptiveSandboxQualificationReport(oneSkip, pin),
+      /failed or skipped fixtures/,
+    );
+  }
+});
+
+test("mediation package version stays at 0.12.1-adaptivesandbox.10", () => {
+  for (const relativePath of [
+    "host/package.json",
+    "packages/gondolin-krun-runner-darwin-arm64/package.json",
+    "packages/gondolin-krun-runner-linux-x64/package.json",
+  ]) {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, relativePath), "utf8"),
+    ) as { version: string };
+    assert.equal(manifest.version, "0.12.1-adaptivesandbox.10");
+  }
+});
+
+function skipFixtures(
+  report: AdaptiveSandboxQualificationReport,
+  categories: readonly AdaptiveSandboxFixtureCategory[],
+): AdaptiveSandboxQualificationReport {
+  const copy = structuredClone(report);
+  const skipped = new Set<AdaptiveSandboxFixtureCategory>(categories);
+  let skippedCount = 0;
+  for (const fixture of copy.fixtures) {
+    if (!skipped.has(fixture.category)) continue;
+    fixture.status = "skipped";
+    skippedCount += 1;
+  }
+  assert.equal(skippedCount, categories.length);
+  copy.summary.security = {
+    passed: copy.fixtures.length - skippedCount,
+    failed: 0,
+    skipped: skippedCount,
+  };
+  return copy;
+}
