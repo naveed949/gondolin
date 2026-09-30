@@ -1,6 +1,16 @@
 {
   "schemaVersion": "gondolin.adaptivesandbox-conformance-pin/v1",
-  "status": "unavailable",
+  "status": "pinned",
   "repository": "naveed949/AdaptiveSandbox",
-  "reason": "No released AdaptiveSandbox conformance bundle exists; compatibility must remain unverified until an exact release asset and SHA-256 are reviewed and pinned."
+  "releaseTag": "v0.1.0-conformance.2",
+  "bundleVersion": "0.1.0-conformance.2",
+  "artifact": {
+    "url": "https://github.com/naveed949/AdaptiveSandbox/releases/download/v0.1.0-conformance.2/adaptive-sandbox-conformance-0.1.0-conformance.2.mjs",
+    "sha256": "sha256:063c45fb03762fe86a7bf61afc01a216e77984286394a443652abd11ff1214e9",
+    "mediaType": "text/javascript"
+  },
+  "execution": {
+    "runtime": "node",
+    "arguments": ["{artifact}", "--adapter", "{adapter}", "--report", "{report}"]
+  }
 }

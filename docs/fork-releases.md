@@ -131,13 +131,12 @@ work directory when changing kernel packages.
 ## Qualification follows implementation
 
 The release manifest deliberately records `adaptiveSandboxQualified: false`.
-Gondolin's checked-in conformance pin remains unavailable. Next, implement the
-AdaptiveSandbox adapter against the exact development artifact, create and release
-the backend-neutral conformance bundle, pin its release asset and SHA-256 in
-Gondolin, and run non-skipping qualification for each exact host/runtime tuple.
-Fix failed or unavailable guarantees before publishing verified compatibility
-rows. A package release alone cannot supply missing resource enforcement or
-independent effects/teardown evidence. Keep Windows and libkrun deferred.
+The conformance pin names AdaptiveSandbox `v0.1.0-conformance.2`, and every
+compatibility row stays unverified or unsupported. Next, run an authenticated
+qualification for each exact host/runtime tuple. Fix failed or unavailable
+guarantees before publishing verified compatibility rows. A package release
+alone cannot supply missing resource enforcement or independent effects/teardown
+evidence. Keep Windows and libkrun deferred.
 
 ## Future versions
 

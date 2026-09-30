@@ -4,6 +4,10 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Pin AdaptiveSandbox conformance bundle `v0.1.0-conformance.2` and record
+  unverified QEMU matrix identities for that asset. No compatibility row is
+  verified, and `adaptiveSandboxQualified` stays false.
+
 ## 0.12.1-adaptivesandbox.10
 
 - Authenticate each observed scoped-tree filesystem effect on its own
