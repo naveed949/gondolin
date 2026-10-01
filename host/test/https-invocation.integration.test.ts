@@ -6,7 +6,7 @@ import test from "node:test";
 import { shouldSkipVmTests } from "./helpers/vm-fixture.ts";
 
 // Public third-party development traffic; not controlled external qualification.
-// CI must run this gate: missing acceleration, curl, network or valid TLS fails it.
+// CI must run these gates: missing acceleration, curl, network or valid TLS fails them.
 const skip = !process.env.CI && shouldSkipVmTests();
 const run = promisify(execFile);
 const helper = fileURLToPath(
@@ -18,10 +18,6 @@ for (const [mode, name] of [
   [
     "bounds",
     "one-shot HTTPS VM enforces decoded response and request deadline bounds",
-  ],
-  [
-    "concurrent",
-    "two overlapping credential-free HTTPS sessions each reach their own public peer",
   ],
 ]) {
   test(name, { skip, timeout: 120000 }, async () => {
@@ -35,3 +31,20 @@ for (const [mode, name] of [
     assert.match(result.stdout, new RegExp(`HTTPS VM ${mode}: PASS`));
   });
 }
+
+// CI always registers skip:false. Missing acceleration, curl, network, TLS, or
+// QEMU fails the helper.
+test(
+  "two overlapping credential-free HTTPS sessions each reach their own public peer",
+  {
+    skip: process.env.CI ? false : shouldSkipVmTests(),
+    timeout: 120000,
+  },
+  async () => {
+    const result = await run(process.execPath, [helper, "concurrent"], {
+      timeout: 110000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    assert.match(result.stdout, /HTTPS VM concurrent: PASS/);
+  },
+);
