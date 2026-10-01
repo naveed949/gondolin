@@ -19,6 +19,10 @@ for (const [mode, name] of [
     "bounds",
     "one-shot HTTPS VM enforces decoded response and request deadline bounds",
   ],
+  [
+    "concurrent",
+    "two overlapping credential-free HTTPS sessions each reach their own public peer",
+  ],
 ]) {
   test(name, { skip, timeout: 120000 }, async () => {
     // Node test workers synthesize TLS flags in execArgv. Start a plain Node
