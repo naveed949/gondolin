@@ -4,6 +4,12 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+## 0.12.1-adaptivesandbox.11
+
+- Run two overlapping credential-free HTTPS grants in one host process. Each
+  grant reaches its own public peer on a helper-owned socket while two
+  descendant QEMU processes are alive. Redirects stay `none`, credentials stay
+  absent, and `adaptiveSandboxQualified` stays false.
 - Pin AdaptiveSandbox conformance bundle `v0.1.0-conformance.2` and record
   unverified QEMU matrix identities for that asset. No compatibility row is
   verified, and `adaptiveSandboxQualified` stays false.
