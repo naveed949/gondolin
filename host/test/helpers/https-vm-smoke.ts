@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +9,10 @@ import {
   verifyHttpsInvocationResult,
 } from "../../src/https-invocation.ts";
 import { isPublicAddress } from "../../src/public-address.ts";
+import {
+  remoteMatchesHostPeers,
+  resolvePublicPeers,
+} from "./https-public-peers.ts";
 import {
   getCapabilityEvidenceVerifierIdentity,
   probeCapabilityInvocationTeardown,
@@ -173,72 +176,6 @@ function parseProcAddress(hex: string): string | null {
   return hextets.map((part) => part.replace(/^0+/, "") || "0").join(":");
 }
 
-function parseIpv4(address: string): Buffer | null {
-  const parts = address.split(".");
-  if (parts.length !== 4) return null;
-  const bytes = Buffer.alloc(4);
-  for (let index = 0; index < 4; index += 1) {
-    const value = Number(parts[index]);
-    if (!Number.isInteger(value) || value < 0 || value > 255) return null;
-    bytes[index] = value;
-  }
-  return bytes;
-}
-
-function parseIpv6(address: string): Buffer | null {
-  const bare = address.split("%")[0] ?? "";
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(bare);
-  if (mapped) {
-    const v4 = parseIpv4(mapped[1]!);
-    if (!v4) return null;
-    const bytes = Buffer.alloc(16);
-    bytes[10] = 0xff;
-    bytes[11] = 0xff;
-    v4.copy(bytes, 12);
-    return bytes;
-  }
-  const halves = bare.split("::");
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(":") : [];
-  const tail = halves.length === 2 ? (halves[1] ? halves[1].split(":") : []) : [];
-  if (halves.length === 1 && head.length !== 8) return null;
-  const missing = 8 - head.length - tail.length;
-  if (missing < 0) return null;
-  const padding = Array.from({ length: missing }, () => "0");
-  const groups = [...head, ...padding, ...tail];
-  if (groups.length !== 8) return null;
-  const bytes = Buffer.alloc(16);
-  for (let index = 0; index < 8; index += 1) {
-    if (!/^[0-9a-fA-F]{1,4}$/.test(groups[index]!)) return null;
-    const value = Number.parseInt(groups[index]!, 16);
-    bytes[index * 2] = value >> 8;
-    bytes[index * 2 + 1] = value & 255;
-  }
-  return bytes;
-}
-
-function addressBytes(address: string): Buffer | null {
-  if (net.isIP(address) === 4) return parseIpv4(address);
-  if (net.isIP(address) === 6) return parseIpv6(address);
-  return null;
-}
-
-function sameAddress(left: string, right: string): boolean {
-  if (left === right) return true;
-  const a = addressBytes(left);
-  const b = addressBytes(right);
-  if (!a || !b) return false;
-  if (a.equals(b)) return true;
-  const mapped = (wide: Buffer, narrow: Buffer) =>
-    wide.length === 16 &&
-    narrow.length === 4 &&
-    wide.subarray(0, 10).equals(Buffer.alloc(10)) &&
-    wide[10] === 0xff &&
-    wide[11] === 0xff &&
-    wide.subarray(12).equals(narrow);
-  return mapped(a, b) || mapped(b, a);
-}
-
 type HostSocket = {
   /** kernel socket inode */
   inode: string;
@@ -337,14 +274,23 @@ type ObservedSocket = HostSocket & {
 /** Independent host socket table for one helper process. Not invocation evidence. */
 function observeSockets(logPath: string, ancestorPid: number): void {
   let qemuPeak = 0;
+  let lastQemuScan = 0;
   const sockets = new Map<string, ObservedSocket>();
   const scan = () => {
-    qemuPeak = Math.max(qemuPeak, descendantQemuCount(ancestorPid));
-    const owned = processSocketInodes(ancestorPid);
     const now = Date.now();
+    // A full /proc walk is slower than the TLS socket lifetime.
+    if (now - lastQemuScan >= 50) {
+      qemuPeak = Math.max(qemuPeak, descendantQemuCount(ancestorPid));
+      lastQemuScan = now;
+    }
+    const owned = processSocketInodes(ancestorPid);
     for (const row of readSocketTable()) {
       if (row.port !== 443 || !owned.has(row.inode)) continue;
-      const current = sockets.get(row.inode) ?? { ...row, first: now, last: now };
+      const current = sockets.get(row.inode) ?? {
+        ...row,
+        first: now,
+        last: now,
+      };
       current.last = now;
       sockets.set(row.inode, current);
     }
@@ -403,6 +349,7 @@ async function concurrent() {
     { host: "example.org", method: "HEAD" as const },
   ];
   let started = 0;
+  const answers = new Map<string, string[]>();
   let results: Array<{
     host: string;
     method: "GET" | "HEAD";
@@ -420,6 +367,11 @@ async function concurrent() {
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    await Promise.all(
+      jobs.map(async (job) => {
+        answers.set(job.host, [...(await resolvePublicPeers(job.host))]);
+      }),
+    );
     started = Date.now();
     results = await Promise.all(
       jobs.map(async (job) => {
@@ -456,6 +408,20 @@ async function concurrent() {
     wallMs + 1000 < results[0]!.ms + results[1]!.ms,
     `sessions did not overlap wall=${wallMs} durations=${results.map((item) => item.ms).join(",")}`,
   );
+  await Promise.all(
+    jobs.map(async (job) => {
+      try {
+        const extra = await resolvePublicPeers(job.host);
+        const merged = answers.get(job.host) ?? [];
+        for (const address of extra) {
+          if (!remoteMatchesHostPeers(address, merged)) merged.push(address);
+        }
+        answers.set(job.host, merged);
+      } catch {
+        // A later resolver failure keeps the pre-session public answers.
+      }
+    }),
+  );
   const peers = new Set<string>();
   const vmIds = new Set<string>();
   const inodes = new Set<string>();
@@ -472,12 +438,20 @@ async function concurrent() {
     const peer = item.result.evidence.network.connection?.peerAddress;
     assert.equal(typeof peer, "string");
     assert.equal(isPublicAddress(peer!), true, peer);
+    // CDN answers are multi-A. The host socket may be another public answer
+    // for this hostname than the single evidence peer.
+    const hostPeers = answers.get(item.host) ?? [];
+    assert.ok(
+      remoteMatchesHostPeers(peer!, hostPeers),
+      `evidence peer ${peer} is not a public answer for ${item.host}: ${hostPeers.join(",")}`,
+    );
     const owned = observation.sockets.filter(
-      (row) => row.port === 443 && sameAddress(row.remote, peer!),
+      (row) =>
+        row.port === 443 && remoteMatchesHostPeers(row.remote, hostPeers),
     );
     assert.ok(
       owned.length > 0,
-      `no host socket for ${item.host} peer ${peer}: ${JSON.stringify(observation)}`,
+      `no host socket in public answers for ${item.host} peer ${peer}: ${JSON.stringify({ peers: hostPeers, observation })}`,
     );
     for (const row of owned) inodes.add(row.inode);
     peers.add(peer!);
