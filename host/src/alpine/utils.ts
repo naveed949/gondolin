@@ -30,16 +30,189 @@ export class DownloadFileError extends Error {
   }
 }
 
-/** Download helper using Node's built-in fetch */
-export async function downloadFile(url: string, dest: string): Promise<void> {
-  const res = await fetch(url, { redirect: "follow" });
+/** total download attempts, including the first */
+const DOWNLOAD_ATTEMPTS = 3;
+/** delay before each retry, in `ms` */
+const DOWNLOAD_RETRY_BACKOFF_MS = [200, 500] as const;
 
-  if (!res.ok) {
-    throw new DownloadFileError(url, { status: res.status });
+const TRANSIENT_ERRNO_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+
+export interface DownloadFileOptions {
+  /** fetch implementation used for this download */
+  fetch?: typeof globalThis.fetch;
+  /** delay before each retry, in `ms` */
+  backoffMs?: readonly number[];
+}
+
+/** Download `url` to `dest`, retrying transient network errors and HTTP 5xx */
+export async function downloadFile(
+  url: string,
+  dest: string,
+  options: DownloadFileOptions = {},
+): Promise<void> {
+  const doFetch = options.fetch ?? fetch;
+  const backoffMs = options.backoffMs ?? DOWNLOAD_RETRY_BACKOFF_MS;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    const retry = attempt < DOWNLOAD_ATTEMPTS;
+    try {
+      const res = await doFetch(url, { redirect: "follow" });
+      if (!res.ok) {
+        await releaseResponse(res);
+        const error = new DownloadFileError(url, { status: res.status });
+        if (retry && isRetryableHttpStatus(res.status)) {
+          lastError = error;
+          await waitForDownloadRetry(url, attempt, error, backoffMs);
+          continue;
+        }
+        throw error;
+      }
+
+      const buf = Buffer.from(await res.arrayBuffer());
+      fs.writeFileSync(dest, buf);
+      return;
+    } catch (err) {
+      if (err instanceof DownloadFileError) {
+        throw err;
+      }
+      if (retry && isTransientDownloadError(err)) {
+        lastError = err;
+        await waitForDownloadRetry(url, attempt, err, backoffMs);
+        continue;
+      }
+      if (isTransientDownloadError(err)) {
+        throw new DownloadFileError(url, {
+          message: `Failed to download ${url}: ${transientFailureDetail(err)}`,
+          cause: err,
+        });
+      }
+      throw err;
+    }
   }
 
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(dest, buf);
+  const status =
+    lastError instanceof DownloadFileError ? lastError.status : undefined;
+  throw new DownloadFileError(url, {
+    status,
+    message:
+      status !== undefined
+        ? `Failed to download ${url}: HTTP ${status}`
+        : `Failed to download ${url}: ${transientFailureDetail(lastError)}`,
+    cause: lastError,
+  });
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status >= 500 && status <= 599;
+}
+
+function waitForDownloadRetry(
+  url: string,
+  attempt: number,
+  err: unknown,
+  backoffMs: readonly number[],
+): Promise<void> {
+  const backoff =
+    backoffMs[attempt - 1] ?? backoffMs[backoffMs.length - 1] ?? 0;
+  const detail = transientFailureDetail(err);
+  console.error(
+    `Retrying download (${attempt}/${DOWNLOAD_ATTEMPTS - 1}) ${url}: ${detail}`,
+  );
+  if (backoff <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    setTimeout(resolve, backoff);
+  });
+}
+
+function isTransientDownloadError(err: unknown): boolean {
+  let transient = false;
+  forEachError(err, (item) => {
+    if (item instanceof TypeError && item.message === "fetch failed") {
+      transient = true;
+    }
+    const code = readErrorCode(item);
+    if (code !== undefined && isTransientNetworkCode(code)) {
+      transient = true;
+    }
+  });
+  return transient;
+}
+
+function transientFailureDetail(err: unknown): string {
+  if (err instanceof DownloadFileError && err.status !== undefined) {
+    return `HTTP ${err.status}`;
+  }
+  let fetchFailed = false;
+  let code: string | undefined;
+  forEachError(err, (item) => {
+    if (
+      !fetchFailed &&
+      item instanceof TypeError &&
+      item.message === "fetch failed"
+    ) {
+      fetchFailed = true;
+    }
+    if (code === undefined) {
+      const itemCode = readErrorCode(item);
+      if (itemCode !== undefined && isTransientNetworkCode(itemCode)) {
+        code = itemCode;
+      }
+    }
+  });
+  if (fetchFailed && code !== undefined) {
+    return `TypeError: fetch failed (${code})`;
+  }
+  if (fetchFailed) return "TypeError: fetch failed";
+  if (code !== undefined) return code;
+  if (err instanceof Error && err.message) return err.message;
+  return "network error";
+}
+
+function isTransientNetworkCode(code: string): boolean {
+  return TRANSIENT_ERRNO_CODES.has(code) || code.startsWith("UND_ERR_");
+}
+
+function readErrorCode(err: object): string | undefined {
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function forEachError(err: unknown, visit: (item: object) => void): void {
+  const seen = new Set<unknown>();
+  const pending = [err];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (
+      current === null ||
+      current === undefined ||
+      typeof current !== "object"
+    ) {
+      continue;
+    }
+    if (seen.has(current)) continue;
+    seen.add(current);
+    visit(current);
+    const cause = (current as { cause?: unknown }).cause;
+    if (cause !== undefined) pending.push(cause);
+    const errors = (current as { errors?: unknown }).errors;
+    if (Array.isArray(errors)) {
+      for (const nested of errors) pending.push(nested);
+    }
+  }
+}
+
+async function releaseResponse(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // Body cancel only frees the socket; the HTTP status is already decisive.
+  }
 }
 
 export function copyExecutable(
