@@ -194,10 +194,25 @@ jobs:
           }
           JSON
 
-          node host/bin/gondolin.ts build \
-            --config build-config-container-smoke.json \
-            --output ./tmp-container-assets \
-            --quiet
+          smoke_log="$(mktemp)"
+          attempt=1
+          max_attempts=3
+          while true; do
+            rm -rf ./tmp-container-assets
+            if node host/bin/gondolin.ts build \
+              --config build-config-container-smoke.json \
+              --output ./tmp-container-assets \
+              --quiet 2>&1 | tee "$smoke_log"
+            then
+              break
+            fi
+            if [ "$attempt" -ge "$max_attempts" ] || ! grep -q 'TypeError: fetch failed' "$smoke_log"; then
+              exit 1
+            fi
+            echo "container build smoke hit transient fetch failure (attempt ${attempt}/${max_attempts}); retrying" >&2
+            attempt=$((attempt + 1))
+            sleep 2
+          done
 
           test -f ./tmp-container-assets/manifest.json
           test -s ./tmp-container-assets/vmlinuz-virt
