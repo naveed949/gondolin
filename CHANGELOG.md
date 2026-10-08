@@ -4,6 +4,15 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Fix an intermittent host `SIGSEGV` in scoped-tree `openat2` and `getdents64`.
+  glibc's x86_64 `syscall()` always loads a sixth syscall argument from the
+  caller's stack, but the koffi bindings declared only five and four parameters.
+  koffi calls run on its own stack with the frame at the very top, so glibc
+  read one slot past that stack and faulted whenever the next page was a guard
+  page. Both bindings now declare the syscall number plus all six arguments and
+  pass `0` for the unused ones. A guard-page test reproduces the old fault on
+  every run and drives 200k calls through the fixed bindings.
+
 ## 0.12.1-adaptivesandbox.11
 
 - Run two overlapping credential-free HTTPS grants in one host process. Each
