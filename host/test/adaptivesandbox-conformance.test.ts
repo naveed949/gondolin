@@ -546,7 +546,7 @@ test("http-tls and credential skips cannot verify the pinned conformance bundle"
   }
 });
 
-test("mediation package version stays at 0.12.1-adaptivesandbox.11", () => {
+test("mediation package version stays at 0.12.1-adaptivesandbox.12", () => {
   for (const relativePath of [
     "host/package.json",
     "packages/gondolin-krun-runner-darwin-arm64/package.json",
@@ -555,7 +555,7 @@ test("mediation package version stays at 0.12.1-adaptivesandbox.11", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, relativePath), "utf8"),
     ) as { version: string };
-    assert.equal(manifest.version, "0.12.1-adaptivesandbox.11");
+    assert.equal(manifest.version, "0.12.1-adaptivesandbox.12");
   }
 });
 
