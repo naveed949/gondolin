@@ -14,9 +14,43 @@ export const RESOLVE_BENEATH = 0x08;
 const SYS_OPENAT2 = 437;
 const SYS_GETDENTS64 = process.arch === "arm64" ? 61 : 217;
 
+/**
+ * koffi prototypes for glibc's variadic `syscall()`
+ *
+ * glibc's x86_64 `syscall()` always forwards six arguments and loads the sixth
+ * from the caller's stack (`8(%rsp)`), whatever the call actually passed.
+ * koffi runs native calls on its own stack with the frame at the very top, so
+ * a shorter prototype makes glibc read one slot past that stack and segfaults
+ * whenever the next page is unmapped or a guard page. Every `syscall()`
+ * binding therefore declares the number plus all six arguments, and callers
+ * pass `0` for the unused ones.
+ */
+export const LIBC_SYSCALL_SIGNATURES = {
+  openat2:
+    "long syscall(long number, long dirfd, const char *path, void *how, size_t size, long arg5, long arg6)",
+  getdents64:
+    "long syscall(long number, long fd, void *buffer, size_t length, long arg4, long arg5, long arg6)",
+} as const;
+
 type Libc = {
-  syscall5(number: number, a: number, b: string, c: Buffer, d: number): number;
-  getdents(number: number, fd: number, buffer: Buffer, length: number): number;
+  openat2Syscall(
+    number: number,
+    dirFd: number,
+    path: string,
+    how: Buffer,
+    size: number,
+    arg5: 0,
+    arg6: 0,
+  ): number;
+  getdentsSyscall(
+    number: number,
+    fd: number,
+    buffer: Buffer,
+    length: number,
+    arg4: 0,
+    arg5: 0,
+    arg6: 0,
+  ): number;
   renameat2(
     oldDirFd: number,
     oldPath: string,
@@ -55,12 +89,12 @@ function libc(): Libc {
   try {
     const lib = koffi.load("libc.so.6");
     loaded = {
-      syscall5: lib.func(
-        "long syscall(long number, int a, const char *b, void *c, size_t d)",
-      ) as Libc["syscall5"],
-      getdents: lib.func(
-        "long syscall(long number, int fd, void *buffer, size_t length)",
-      ) as Libc["getdents"],
+      openat2Syscall: lib.func(
+        LIBC_SYSCALL_SIGNATURES.openat2,
+      ) as Libc["openat2Syscall"],
+      getdentsSyscall: lib.func(
+        LIBC_SYSCALL_SIGNATURES.getdents64,
+      ) as Libc["getdentsSyscall"],
       renameat2: lib.func(
         "int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags)",
       ) as Libc["renameat2"],
@@ -115,7 +149,7 @@ export function openat2(
 ): number {
   const path = relativePath.length === 0 ? "." : relativePath;
   return checked(
-    libc().syscall5(SYS_OPENAT2, dirFd, path, openHow(flags, mode, resolve), 24),
+    libc().openat2Syscall(SYS_OPENAT2, dirFd, path, openHow(flags, mode, resolve), 24, 0, 0),
     "openat2",
     path,
   );
@@ -166,7 +200,7 @@ export function getdents64(dirFd: number): string[] {
   const names: string[] = [];
   const buffer = Buffer.alloc(4096);
   for (;;) {
-    const n = libc().getdents(SYS_GETDENTS64, dirFd, buffer, buffer.length);
+    const n = libc().getdentsSyscall(SYS_GETDENTS64, dirFd, buffer, buffer.length, 0, 0, 0);
     if (n === 0) break;
     if (n < 0) {
       throw createErrnoError(libc().errno() || os.constants.errno.EIO, "getdents64");
