@@ -149,7 +149,15 @@ export function openat2(
 ): number {
   const path = relativePath.length === 0 ? "." : relativePath;
   return checked(
-    libc().openat2Syscall(SYS_OPENAT2, dirFd, path, openHow(flags, mode, resolve), 24, 0, 0),
+    libc().openat2Syscall(
+      SYS_OPENAT2,
+      dirFd,
+      path,
+      openHow(flags, mode, resolve),
+      24,
+      0,
+      0,
+    ),
     "openat2",
     path,
   );
@@ -200,7 +208,15 @@ export function getdents64(dirFd: number): string[] {
   const names: string[] = [];
   const buffer = Buffer.alloc(4096);
   for (;;) {
-    const n = libc().getdentsSyscall(SYS_GETDENTS64, dirFd, buffer, buffer.length, 0, 0, 0);
+    const n = libc().getdentsSyscall(
+      SYS_GETDENTS64,
+      dirFd,
+      buffer,
+      buffer.length,
+      0,
+      0,
+      0,
+    );
     if (n === 0) break;
     if (n < 0) {
       throw createErrnoError(libc().errno() || os.constants.errno.EIO, "getdents64");
