@@ -1,18 +1,20 @@
 # Experimental fork releases
 
-The next prepared fork release is `v0.12.1-adaptivesandbox.11`. It is a GitHub-only,
+The next prepared fork release is `v0.12.1-adaptivesandbox.12`. It is a GitHub-only,
 QEMU-only prerelease for adapter development. It is not an AdaptiveSandbox-qualified
 release, and it does not unblock qualified production admission by itself.
+`v0.12.1-adaptivesandbox.11` stays at `4218b66b1ff18c2a685ec8dab8460fa4a2e41c59`.
 `v0.12.1-adaptivesandbox.10` stays at `198e19532bf29e8abdab8dc1abdaefc0941c388a`.
 `v0.12.1-adaptivesandbox.9` stays at `d367a3b276d1a207e68cc7f703df5e634a84b841`.
 `v0.12.1-adaptivesandbox.8` stays at `504bb7e9f8bfda8cad0a88072529e584bc931171`
-and does not advertise `scoped-tree-runner`. Never retag `.8`, `.9`, or `.10`. `.9`
+and does not advertise `scoped-tree-runner`. Never retag `.8`, `.9`, `.10`, or `.11`. `.9`
 advertises `scoped-tree-runner/v1` only after the guest and host contract tests;
 qualification rows stay unverified. `.10` authenticates each observed scoped-tree
 filesystem effect on its own sequence. Attempted and observed sequences stay
 unique. `.11` runs two overlapping credential-free HTTPS grants, each reaching
-its own public peer. `scoped-tree-runner/v1` stays advertised. This release is not
-qualification.
+its own public peer. `.12` fixes an intermittent host `SIGSEGV` in the scoped-tree
+`openat2` and `getdents64` koffi `syscall()` bindings. `scoped-tree-runner/v1`
+stays advertised. This release is not qualification.
 The credential-free HTTPS invocation implementation carried forward from `.5` adds
 authenticated connected-peer/TLS observations, response provenance, and bounded
 response settlement, advancing its network policy to `http-tls-mediator/v3`.
@@ -50,13 +52,22 @@ advertised and `adaptiveSandboxQualified` stays false.
 grant's outbound is a distinct public peer on a helper-owned host socket while
 two descendant QEMU processes are alive. Exact origin and method, public-address
 resolution, TLS identity, redirect refusal, and response/deadline bounds stay
-in force. The recorded conformance matrix stays unverified.
+in force. That release stays at `4218b66b1ff18c2a685ec8dab8460fa4a2e41c59`.
+The recorded conformance matrix stays unverified.
 `adaptiveSandboxQualified` stays false.
 
-Create the `.11` tag only after these changes are reviewed, merged, and the exact
+`.12` declares the glibc `syscall()` koffi bindings for scoped-tree `openat2`
+and `getdents64` with the syscall number plus all six arguments. glibc's x86_64
+`syscall()` always loads the sixth argument from the caller's stack, and the
+shorter prototypes read one slot past koffi's call stack, which faulted with
+`SIGSEGV` whenever the next page was a guard page. Scoped-tree behavior and
+evidence are otherwise unchanged. The recorded conformance matrix stays
+unverified. `adaptiveSandboxQualified` stays false.
+
+Create the `.12` tag only after these changes are reviewed, merged, and the exact
 main commit passes CI. Never retag a published release. Never move
-`v0.12.1-adaptivesandbox.8`, `v0.12.1-adaptivesandbox.9`, or
-`v0.12.1-adaptivesandbox.10`.
+`v0.12.1-adaptivesandbox.8`, `v0.12.1-adaptivesandbox.9`,
+`v0.12.1-adaptivesandbox.10`, or `v0.12.1-adaptivesandbox.11`.
 
 ## Prepare and publish
 
@@ -67,8 +78,8 @@ main commit passes CI. Never retag a published release. Never move
    ```bash
    git switch main
    git pull --ff-only origin main
-   git tag -a v0.12.1-adaptivesandbox.11 -m "Experimental AdaptiveSandbox integration release"
-   git push origin v0.12.1-adaptivesandbox.11
+   git tag -a v0.12.1-adaptivesandbox.12 -m "Experimental AdaptiveSandbox integration release"
+   git push origin v0.12.1-adaptivesandbox.12
    ```
 
 3. Watch **Experimental GitHub Release** in Actions. It validates the tag, reuses
@@ -99,10 +110,10 @@ artifact removes optional krun packages and workspace lifecycle scripts. It can
 still be installed from a downloaded tarball:
 
 ```bash
-gh release download v0.12.1-adaptivesandbox.11 --repo naveed949/gondolin --dir gondolin-release
+gh release download v0.12.1-adaptivesandbox.12 --repo naveed949/gondolin --dir gondolin-release
 cd gondolin-release
 sha256sum --check SHA256SUMS
-npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.11.tgz
+npm install ./earendil-works-gondolin-0.12.1-adaptivesandbox.12.tgz
 ```
 
 On macOS, use `shasum -a 256 -c SHA256SUMS`. Install QEMU separately. The package's
@@ -114,7 +125,7 @@ image archive for a fully explicit local setup.
 
 The image registry includes an `alpine-base:latest` alias *within the fixed
 release registry*. For explicit development identity use
-`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.11`, or a digest-verified
+`GONDOLIN_DEFAULT_IMAGE=alpine-base:0.12.1-adaptivesandbox.12`, or a digest-verified
 extracted image directory. Existing local image caches and explicit overrides
 are operator state, not qualification evidence.
 
