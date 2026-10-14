@@ -16,7 +16,7 @@ Interactive session starts a shell that stays up, shows that shell in `gondolin 
 - Run `gondolin attach <session-id>`.
 - Press `Ctrl-]` in the owner shell to detach.
 
-## Driving it with verify-gondolin
+## Driving it
 
 Preconditions:
 

@@ -13,7 +13,7 @@ Run a command starts a disposable micro-VM, runs one absolute command, writes a 
 - Run `gondolin exec --mount-hostfs <host-dir>:/workspace -- <command>`.
 - Run `gondolin exec -- <command>` when no host mount is required.
 
-## Driving it with verify-gondolin
+## Driving it
 
 Preconditions:
 
