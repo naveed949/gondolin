@@ -30,7 +30,9 @@ Ready when launch prints both `ready: gondolin help` and `ready: image alpine-ba
 
 If `command -v node` is older than 23.6.0, install Node 24 (or any 23.6+) and prepend its `bin` directory before launch. If `pnpm` is missing from that Node install: `corepack enable && corepack prepare pnpm@8.15.0 --activate`. If `qemu-system-x86_64` (x86_64) or `qemu-system-aarch64` (aarch64) is missing, install the matching QEMU system package before launch.
 
-When `/dev/kvm` is not readable and writable, launch exports `GONDOLIN_START_TIMEOUT_MS=300000` unless it is already set. QEMU then uses TCG. The code default without that variable is `120000` ms (`GONDOLIN_START_TIMEOUT_MS` in `host/src/vm/core.ts`). KVM acceleration is **UNVERIFIED** unless doctor later prints `accel=kvm`.
+When `/dev/kvm` is not readable and writable, launch exports `GONDOLIN_START_TIMEOUT_MS=300000` unless it is already set. QEMU then uses TCG (`q35` on Linux x86_64). The code default without that variable is `120000` ms (`GONDOLIN_START_TIMEOUT_MS` in `host/src/vm/core.ts`).
+
+Writable `/dev/kvm` is not enough. If guest readiness times out while doctor printed `accel=kvm`, check `dmesg` for a nested KVM fault (`kvm_arch_vcpu_create`). That run is not proof. Restore `/dev/kvm` so this user cannot write it, then re-run launch/drive so QEMU uses TCG. KVM stays **UNVERIFIED**. Do not shorten the `cli-exec` journey.
 
 The first `image pull` downloads the alpine-base archive for this arch into the shared image store. Later launches reuse that store. Launch does not point `GONDOLIN_IMAGE_STORE` at the verify root. Record the compressed size from that pull in the evidence `meta.txt` for the run; do not copy a size from an older package version.
 

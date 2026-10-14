@@ -33,3 +33,4 @@ Preconditions:
 - `--env VERIFY_MARKER=...` is the guest-visible value. The host shell variable is not copied in on its own.
 - `gondolin list` with `GONDOLIN_SESSIONS_DIR` unset reads `~/.cache/gondolin/sessions` and can attach to someone else's VM. Keep the private directory exported.
 - A non-zero `exit-code.txt` or `result.txt` other than `ok` is a failed proof. Leave the artifact directory for cleanup.
+- Writable `/dev/kvm` is not the same as a working accelerator. This nested host kernel BUGs in `kvm_arch_vcpu_create` (`dmesg`: `kernel BUG at arch/x86/kvm/x86.c`). Treat KVM as **UNVERIFIED**, make `/dev/kvm` not writable, and re-run so the helpers use TCG with `GONDOLIN_START_TIMEOUT_MS=300000`. Do not drop the mount or identity checks to make a timed-out boot look like success.

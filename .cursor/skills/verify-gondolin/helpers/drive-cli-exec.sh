@@ -120,22 +120,27 @@ else
   : >"$EVIDENCE/marker-host.txt"
 fi
 
-result=ok
+failures=()
 if [[ "$status" -ne 0 ]]; then
-  result=exec-exit
+  failures+=(exec-exit)
 fi
 if ! grep -q '^Linux$' "$EVIDENCE/stdout.txt"; then
-  result=stdout-uname
+  failures+=(stdout-uname)
 fi
 if ! grep -q 'Alpine Linux' "$EVIDENCE/stdout.txt"; then
-  result=stdout-os-release
+  failures+=(stdout-os-release)
 fi
 got=$(cat "$EVIDENCE/marker-host.txt" 2>/dev/null || true)
 if [[ "$got" != "$MARKER" ]]; then
-  result=marker
+  failures+=(marker)
 fi
 if ! grep -q '^No running sessions\.$' "$EVIDENCE/list-after.txt"; then
-  result=session-left-running
+  failures+=(session-left-running)
+fi
+if [[ ${#failures[@]} -eq 0 ]]; then
+  result=ok
+else
+  result=$(IFS=,; echo "${failures[*]}")
 fi
 echo "$result" >"$EVIDENCE/result.txt"
 echo "evidence=$EVIDENCE"
