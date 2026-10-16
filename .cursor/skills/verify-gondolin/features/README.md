@@ -29,8 +29,9 @@ This directory is the maintained source for verifying the user-facing behavior o
 - CLI proof includes the command, stdout, stderr, and exit code.
 - Mutation proof includes a read-only second view of the stored value.
 - Record the feature ID and entry point used with every artifact.
-- Report an unreachable path with the attempted command and the unmet precondition.
+- Report an unreachable path as **UNVERIFIED** with the attempted command and the unmet precondition.
 - Do not report a skipped entry point as verified through a different path.
+- Do not shorten a feature journey to make it pass.
 
 ## Feature entry contract
 
@@ -45,7 +46,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Run a command](./cli-exec.md) covers one-shot `gondolin exec`, a host-directory mount, and session exit.
-- [Interactive session](./cli-session.md) covers `gondolin bash`, `gondolin list`, and `gondolin attach`.
-- [SDK exec](./sdk-exec.md) covers `VM.create`, `vm.exec`, and `vm.close`.
-- [HTTP egress policy](./http-egress.md) covers host allowlists and secret placeholders.
+- [Run a command](./cli-exec.md) covers one-shot `gondolin exec`, a host-directory mount, and session exit. Drive it with `helpers/drive-cli-exec.sh`.
+- [Interactive session](./cli-session.md) covers `gondolin bash`, `gondolin list`, and `gondolin attach`. There is no helper; the feature file is the stand-in recipe.
+- [SDK exec](./sdk-exec.md) covers `VM.create`, `vm.exec`, and `vm.close`. There is no helper; the feature file is the stand-in recipe.
+- [HTTP egress policy](./http-egress.md) covers host allowlists and secret placeholders. There is no helper; the feature file is the stand-in recipe.

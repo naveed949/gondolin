@@ -9,6 +9,8 @@ Gondolin runs commands inside a local Linux micro-VM. The primary surface is the
 
 This fork's package version is the `version` field in `host/package.json`. Guest images resolve from that version's GitHub release registry (`builtin-image-registry.json` on the release), then the local store at `${XDG_CACHE_HOME:-$HOME/.cache}/gondolin/images`. `npx @earendil-works/gondolin` installs upstream npm, which is a different build. Verification uses the built file `host/dist/bin/gondolin.js` from this checkout.
 
+Fail closed. Do not invent CLI flags, SDK methods, helper scripts, or HTTP endpoints. A mapped feature, backend, or accelerator that this run did not execute is **UNVERIFIED**. Do not treat unit tests, skipped VM tests (`shouldSkipVmTests()`), or a different entry point as a substitute.
+
 ## Launch
 
 Launch builds the CLI once and caches `alpine-base:latest` for the host architecture. Each drive then starts its own short-lived QEMU process. There is no long-running server.
@@ -28,9 +30,11 @@ Ready when launch prints both `ready: gondolin help` and `ready: image alpine-ba
 
 If `command -v node` is older than 23.6.0, install Node 24 (or any 23.6+) and prepend its `bin` directory before launch. If `pnpm` is missing from that Node install: `corepack enable && corepack prepare pnpm@8.15.0 --activate`. If `qemu-system-x86_64` (x86_64) or `qemu-system-aarch64` (aarch64) is missing, install the matching QEMU system package before launch.
 
-When `/dev/kvm` is not readable and writable, launch exports `GONDOLIN_START_TIMEOUT_MS=300000` unless it is already set. QEMU then uses TCG. The code default without that variable is `120000` ms (`GONDOLIN_START_TIMEOUT_MS` in `host/src/vm/core.ts`).
+When `/dev/kvm` is not readable and writable, launch exports `GONDOLIN_START_TIMEOUT_MS=300000` unless it is already set. QEMU then uses TCG (`q35` on Linux x86_64). The code default without that variable is `120000` ms (`GONDOLIN_START_TIMEOUT_MS` in `host/src/vm/core.ts`).
 
-The first `image pull` downloads the alpine-base archive for this arch into the shared image store. For package `0.12.1-adaptivesandbox.10` the x86_64 archive is about 925 MB compressed. Later launches reuse that store. Launch does not point `GONDOLIN_IMAGE_STORE` at the verify root.
+Writable `/dev/kvm` is not enough. If guest readiness times out while doctor printed `accel=kvm`, check `dmesg` for a nested KVM fault (`kvm_arch_vcpu_create`). That run is not proof. Restore `/dev/kvm` so this user cannot write it, then re-run launch/drive so QEMU uses TCG. KVM stays **UNVERIFIED**. Do not shorten the `cli-exec` journey.
+
+The first `image pull` downloads the alpine-base archive for this arch into the shared image store. Later launches reuse that store. Launch does not point `GONDOLIN_IMAGE_STORE` at the verify root. Do not copy a compressed size from an older package version into this run's evidence.
 
 ## Doctor
 
@@ -78,7 +82,7 @@ node host/dist/bin/gondolin.js exec --vmm qemu \
 
 Success is exit code 0, stdout containing a `Linux` line and `Alpine Linux`, the host file `$GONDOLIN_VERIFY_ROOT/workspace/marker.txt` equal to `gondolin-verify-$GONDOLIN_VERIFY_RUN_ID`, and a following `gondolin list` printing `No running sessions.`
 
-Other mapped features (`cli-session`, `sdk-exec`, `http-egress`) use the commands in their feature files. A run that only drives `cli-exec` leaves those features unproven.
+Other mapped features (`cli-session`, `sdk-exec`, `http-egress`) use the commands in their feature files. A run that only drives `cli-exec` leaves those features **UNVERIFIED**. Do not shorten a feature journey to make it pass.
 
 ## Evidence
 
@@ -95,8 +99,9 @@ Proof for a drive is the command, stdout, stderr, exit code, and a second view o
 - `list-after.txt`, `list-after.stderr.txt`, `list-after.exit-code.txt`
 - `meta.txt`, `result.txt` (`ok` when every check passed)
 - `doctor.txt` when doctor was teed as shown above
+- `kvm-dmesg.txt` when doctor printed `accel=kvm` and guest readiness timed out. Capture filtered `dmesg` by hand. `drive-cli-exec.sh` does not write this file.
 
-`result.txt` other than `ok` means that run is not proof. Record the feature id that was actually driven. An entry point that was not run stays unproven.
+`result.txt` other than `ok` means that run is not proof. Record the feature id that was actually driven. An entry point that was not run stays **UNVERIFIED**. A directory whose `doctor.txt` `package_version` does not match `host/package.json` is not proof for this checkout.
 
 ## Cleanup
 
@@ -125,15 +130,15 @@ From the repo root:
 
 ## Secondary surfaces
 
-These exist in the product and are outside the feature map. Driving them does not prove a mapped feature, and it does not prove AdaptiveSandbox conformance.
+These exist in the product and are outside the feature map. Driving them does not prove a mapped feature, and it does not prove AdaptiveSandbox conformance. Until a run executes them, they stay **UNVERIFIED**.
 
 - Capability Invocation API (`CapabilityInvocationContext`, profiles `exact-reader`, `exact-writer`, `scoped-runner`) in `docs/capability-invocation.md`. `docs/fork-releases.md` keeps `adaptiveSandboxQualified` false until an independent conformance run says otherwise.
 - `gondolin snapshot` and `gondolin bash --resume`
 - ingress (`gondolin bash --listen`, `vm.enableIngress()`)
-- SSH egress (`--ssh-allow-host`) and host SSH (`--ssh`)
+- SSH egress (`--ssh-allow-host`) and host SSH (`--ssh`, `vm.enableSsh()`)
 - `--vmm krun` (needs a krun runner and hardware virtualization)
 - `gondolin image` and `gondolin build` for custom images
 
 ## Maintenance
 
-Keep this map aligned with the CLI and SDK using `/maintain-verification-skill`.
+When CLI flags, SDK methods, default images, or helper scripts change, update Launch, Doctor, Drive, Evidence, and the matching file under `features/` in the same change. Do not leave a command in the map that is not in `host/bin/gondolin.ts` or `host/src/index.ts`. Keep this map aligned with the CLI and SDK using `/maintain-verification-skill`.
