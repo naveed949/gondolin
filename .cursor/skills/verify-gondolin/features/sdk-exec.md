@@ -14,7 +14,7 @@ SDK exec creates a VM from `@earendil-works/gondolin`, runs a shell command, ret
 - Call `VM.create`, then `vm.exec`, then `vm.close`.
 - Run `gondolin list` to see the session while the VM is open.
 
-## Driving it
+## Driving it with verify-gondolin
 
 Preconditions:
 

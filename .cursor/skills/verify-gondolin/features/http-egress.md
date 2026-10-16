@@ -14,7 +14,7 @@ HTTP egress policy lets a guest call an allowlisted host and holds the real secr
 - Run `gondolin exec --allow-host <host> -- <command>`.
 - Pass `createHttpHooks({ allowedHosts, secrets })` into `VM.create` together with the returned `env`.
 
-## Driving it
+## Driving it with verify-gondolin
 
 Preconditions:
 

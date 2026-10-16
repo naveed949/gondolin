@@ -1,1 +1,1 @@
-marker
+exec-exit,stdout-uname,stdout-os-release,marker

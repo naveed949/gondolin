@@ -34,7 +34,7 @@ When `/dev/kvm` is not readable and writable, launch exports `GONDOLIN_START_TIM
 
 Writable `/dev/kvm` is not enough. If guest readiness times out while doctor printed `accel=kvm`, check `dmesg` for a nested KVM fault (`kvm_arch_vcpu_create`). That run is not proof. Restore `/dev/kvm` so this user cannot write it, then re-run launch/drive so QEMU uses TCG. KVM stays **UNVERIFIED**. Do not shorten the `cli-exec` journey.
 
-The first `image pull` downloads the alpine-base archive for this arch into the shared image store. Later launches reuse that store. Launch does not point `GONDOLIN_IMAGE_STORE` at the verify root. Record the compressed size from that pull in the evidence `meta.txt` for the run; do not copy a size from an older package version.
+The first `image pull` downloads the alpine-base archive for this arch into the shared image store. Later launches reuse that store. Launch does not point `GONDOLIN_IMAGE_STORE` at the verify root. Do not copy a compressed size from an older package version into this run's evidence.
 
 ## Doctor
 
@@ -99,8 +99,9 @@ Proof for a drive is the command, stdout, stderr, exit code, and a second view o
 - `list-after.txt`, `list-after.stderr.txt`, `list-after.exit-code.txt`
 - `meta.txt`, `result.txt` (`ok` when every check passed)
 - `doctor.txt` when doctor was teed as shown above
+- `kvm-dmesg.txt` when doctor printed `accel=kvm` and guest readiness timed out. Capture filtered `dmesg` by hand. `drive-cli-exec.sh` does not write this file.
 
-`result.txt` other than `ok` means that run is not proof. Record the feature id that was actually driven. An entry point that was not run stays **UNVERIFIED**.
+`result.txt` other than `ok` means that run is not proof. Record the feature id that was actually driven. An entry point that was not run stays **UNVERIFIED**. A directory whose `doctor.txt` `package_version` does not match `host/package.json` is not proof for this checkout.
 
 ## Cleanup
 
@@ -140,4 +141,4 @@ These exist in the product and are outside the feature map. Driving them does no
 
 ## Maintenance
 
-When CLI flags, SDK methods, default images, or helper scripts change, update Launch, Doctor, Drive, Evidence, and the matching file under `features/` in the same change. Do not leave a command in the map that is not in `host/bin/gondolin.ts` or `host/src/index.ts`.
+When CLI flags, SDK methods, default images, or helper scripts change, update Launch, Doctor, Drive, Evidence, and the matching file under `features/` in the same change. Do not leave a command in the map that is not in `host/bin/gondolin.ts` or `host/src/index.ts`. Keep this map aligned with the CLI and SDK using `/maintain-verification-skill`.
