@@ -4,10 +4,13 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
-- Fail closed on leftover verify-gondolin `ok` artifacts whose `doctor.txt`
-  package version does not match `host/package.json`, on advertised capability
-  profiles that drop their earning tests, and on `Soft-PASS` as a qualification
-  status. `adaptiveSandboxQualified` stays false.
+- Fail closed on leftover verify-gondolin `ok` artifacts whose `doctor.txt` is
+  missing, not `status=ready`, or whose package version does not match
+  `host/package.json`; on advertised capability profiles that drop their earning
+  tests; and on `Soft-PASS` as a qualification status. Doctor proof is one
+  function shared by the helper and CI. Advertise and Soft-PASS checks call the
+  live feature manifest and compatibility-matrix parser.
+  `adaptiveSandboxQualified` stays false.
 
 ## 0.12.1-adaptivesandbox.12
 

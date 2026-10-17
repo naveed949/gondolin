@@ -119,7 +119,6 @@ else
   : >"$EVIDENCE/marker-host.txt"
 fi
 
-package_version=$(node -p "require('$REPO/host/package.json').version")
 failures=()
 if [[ "$status" -ne 0 ]]; then
   failures+=(exec-exit)
@@ -138,10 +137,12 @@ if ! grep -q '^No running sessions\.$' "$EVIDENCE/list-after.txt"; then
   failures+=(session-left-running)
 fi
 if [[ ${#failures[@]} -eq 0 ]]; then
-  if [[ ! -f "$EVIDENCE/doctor.txt" ]]; then
-    failures+=(missing-doctor)
-  elif ! grep -qx "package_version=$package_version" "$EVIDENCE/doctor.txt"; then
-    failures+=(stale-package-version)
+  set +e
+  doctor_reason=$(node "$REPO/scripts/agent-invariants.mjs" doctor-proof "$EVIDENCE/doctor.txt")
+  doctor_status=$?
+  set -e
+  if [[ "$doctor_status" -ne 0 ]]; then
+    failures+=("${doctor_reason:-missing-doctor}")
   fi
 fi
 if [[ ${#failures[@]} -eq 0 ]]; then

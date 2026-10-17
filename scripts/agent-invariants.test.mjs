@@ -8,14 +8,14 @@ import {
   EARNED_ACTIVE_PROFILES,
   EXTRA_EVIDENCE_FILES,
   FEATURE_HEADINGS,
-  HELPER_EVIDENCE_FILES,
   checkAdvertisedProfiles,
   checkFeatureHeadings,
   checkSkillEvidenceNames,
   checkSoftPassRejected,
   checkVerifyEvidence,
+  evaluateDoctorProof,
+  helperWrittenEvidenceFiles,
   packageVersion,
-  readManifestProfiles,
   repoRoot,
   runAgentInvariants,
 } from "./agent-invariants.mjs";
@@ -31,6 +31,46 @@ function write(file, text) {
 
 test("current checkout satisfies the agent invariant gates", () => {
   assert.deepEqual(runAgentInvariants(), []);
+});
+
+test("evaluateDoctorProof requires a ready doctor for this package version", () => {
+  const version = "0.12.1-adaptivesandbox.12";
+  assert.deepEqual(evaluateDoctorProof("", version), {
+    ok: false,
+    reason: "missing-doctor",
+    detail:
+      "doctor.txt is missing; tee doctor.sh into this directory before treating the run as proof",
+  });
+  assert.equal(
+    evaluateDoctorProof("package_version=0.12.1-adaptivesandbox.12\n", version)
+      .reason,
+    "doctor-not-ready",
+  );
+  assert.equal(
+    evaluateDoctorProof(
+      "status=refuse\npackage_version=0.12.1-adaptivesandbox.12\n",
+      version,
+    ).reason,
+    "doctor-not-ready",
+  );
+  assert.equal(
+    evaluateDoctorProof("status=ready\n", version).reason,
+    "missing-doctor",
+  );
+  assert.equal(
+    evaluateDoctorProof(
+      "status=ready\npackage_version=0.12.1-adaptivesandbox.10\n",
+      version,
+    ).reason,
+    "stale-package-version",
+  );
+  assert.deepEqual(
+    evaluateDoctorProof(
+      "status=ready\npackage_version=0.12.1-adaptivesandbox.12\n",
+      version,
+    ),
+    { ok: true, reason: null, detail: null },
+  );
 });
 
 test("a leftover ok verify tree from an older package version is not proof", () => {
@@ -66,6 +106,26 @@ test("an ok verify tree without doctor.txt is not proof", () => {
     });
     assert.equal(errors.length, 1);
     assert.match(errors[0], /doctor\.txt is missing/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an ok verify tree whose doctor is not ready is not proof", () => {
+  const root = tempDir("gondolin-doctor-not-ready-");
+  try {
+    const dir = path.join(root, "cli-exec", "refuse");
+    write(path.join(dir, "result.txt"), "ok\n");
+    write(
+      path.join(dir, "doctor.txt"),
+      `package_version=${packageVersion()}\nstatus=refuse\n`,
+    );
+    const errors = checkVerifyEvidence({
+      artifactsRoot: root,
+      expectedVersion: packageVersion(),
+    });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /status is not ready/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -130,37 +190,27 @@ test("an invented Evidence filename that the helper does not write is rejected",
     assert.equal(errors.length, 1);
     assert.match(errors[0], /image-size\.txt/);
     assert.match(errors[0], /drive-cli-exec\.sh/);
-    assert.ok(HELPER_EVIDENCE_FILES.includes("result.txt"));
+    assert.ok(helperWrittenEvidenceFiles().has("result.txt"));
     assert.ok(EXTRA_EVIDENCE_FILES.includes("doctor.txt"));
   } finally {
     fs.rmSync(path.dirname(file), { recursive: true, force: true });
   }
 });
 
-test("unquoted active profile keys are still parsed from the manifest", () => {
-  const root = tempDir("gondolin-unquoted-profile-");
-  try {
-    write(
-      path.join(root, "host/src/capability-invocation.ts"),
-      [
-        "  profiles: {\n",
-        '    "exact-reader": "active",\n',
-        '    invented: "active",\n',
-        '    writer: "unsupported",\n',
-        "  },\n",
-      ].join(""),
-    );
-    const profiles = readManifestProfiles(root);
-    assert.equal(profiles.invented, "active");
-    assert.equal(profiles.writer, "unsupported");
-    assert.ok(
-      checkAdvertisedProfiles({ manifest: { profiles }, root: repoRoot }).some(
-        (error) => /invented is active without an earning-test row/.test(error),
-      ),
-    );
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test("the live feature manifest is the advertise source", () => {
+  assert.deepEqual(checkAdvertisedProfiles(), []);
+  const errors = checkAdvertisedProfiles({
+    manifest: {
+      profiles: {
+        invented: "active",
+      },
+    },
+  });
+  assert.ok(
+    errors.some((error) =>
+      /invented is active without an earning-test row/.test(error),
+    ),
+  );
 });
 
 test("advertising a profile without its earning test is rejected", () => {
@@ -184,7 +234,7 @@ test("advertising scoped-tree-runner after dropping the denial title is rejected
   const root = tempDir("gondolin-advertise-");
   try {
     const rel = EARNED_ACTIVE_PROFILES["scoped-tree-runner"].files[0];
-    write(path.join(root, rel), 'test("unrelated success path", () => {});\n');
+    write(path.join(root, rel), 'const name = "unrelated success path";\n');
     const errors = checkAdvertisedProfiles({
       manifest: { profiles: { "scoped-tree-runner": "active" } },
       root,
@@ -196,12 +246,6 @@ test("advertising scoped-tree-runner after dropping the denial title is rejected
   }
 });
 
-test("Soft-PASS is not a qualification status", () => {
+test("Soft-PASS is rejected by the live compatibility-matrix parser", () => {
   assert.deepEqual(checkSoftPassRejected(), []);
-  const invented = [
-    'export type QualificationStatus = "verified" | "unverified" | "Soft-PASS";',
-    'if (!["verified", "unverified", "Soft-PASS"].includes(String(input))) {',
-  ].join("\n");
-  const errors = checkSoftPassRejected({ source: invented });
-  assert.ok(errors.some((error) => /Soft-PASS/.test(error)));
 });

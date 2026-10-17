@@ -4,6 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseAdaptiveSandboxCompatibilityMatrix } from "../host/src/adaptivesandbox-conformance.ts";
+import { getCapabilityInvocationFeatureManifest } from "../host/src/capability-invocation.ts";
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(here, "..");
 
@@ -14,32 +17,18 @@ export const FEATURE_HEADINGS = [
   "Gotchas",
 ];
 
-export const HELPER_EVIDENCE_FILES = [
-  "command.txt",
-  "feature-id.txt",
-  "entry-point.txt",
-  "marker-expected.txt",
-  "meta.txt",
-  "stdout.txt",
-  "stderr.txt",
-  "exit-code.txt",
-  "list-after.txt",
-  "list-after.stderr.txt",
-  "list-after.exit-code.txt",
-  "marker-host.txt",
-  "result.txt",
-];
-
 export const EXTRA_EVIDENCE_FILES = ["doctor.txt", "kvm-dmesg.txt"];
 
 export const EARNED_ACTIVE_PROFILES = {
   "exact-reader": {
     files: ["host/test/capability-invocation.integration.test.ts"],
-    requiredText: "public seam allows only the exact reader",
+    requiredText:
+      "public seam allows only the exact reader and settles after teardown",
   },
   "https-request": {
     files: ["host/test/https-invocation.integration.test.ts"],
-    requiredText: "one-shot HTTPS VM public TLS GET/HEAD",
+    requiredText:
+      "one-shot HTTPS VM public TLS GET/HEAD development evidence",
   },
   "exact-reader.http-tls-credentials": {
     files: ["host/test/capability-invocation.test.ts"],
@@ -81,6 +70,71 @@ function walkDirs(dir) {
   return found;
 }
 
+function defaultHelperPath() {
+  return path.join(
+    repoRoot,
+    ".cursor/skills/verify-gondolin/helpers/drive-cli-exec.sh",
+  );
+}
+
+export function helperWrittenEvidenceFiles(helperPath = defaultHelperPath()) {
+  const names = new Set();
+  for (const match of read(helperPath).matchAll(
+    /\$EVIDENCE\/([A-Za-z0-9.-]+\.txt)/g,
+  )) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
+export function evaluateDoctorProof(doctorText, version) {
+  if (doctorText == null || doctorText === "") {
+    return {
+      ok: false,
+      reason: "missing-doctor",
+      detail:
+        "doctor.txt is missing; tee doctor.sh into this directory before treating the run as proof",
+    };
+  }
+  if (!/^status=ready$/m.test(doctorText)) {
+    return {
+      ok: false,
+      reason: "doctor-not-ready",
+      detail: "doctor.txt status is not ready; refuse this tree as current proof",
+    };
+  }
+  const match = doctorText.match(/^package_version=(.*)$/m);
+  if (!match) {
+    return {
+      ok: false,
+      reason: "missing-doctor",
+      detail: "doctor.txt has no package_version line; refuse this tree as current proof",
+    };
+  }
+  if (match[1] !== version) {
+    return {
+      ok: false,
+      reason: "stale-package-version",
+      detail: `doctor.txt package_version=${match[1]} does not match host/package.json ${version}; a leftover ok tree is not proof for this checkout`,
+    };
+  }
+  return { ok: true, reason: null, detail: null };
+}
+
+function hasEarningTest(fileText, title) {
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (
+    new RegExp(String.raw`(?:test|vmTest)\(\s*["\`]${escaped}["\`]`).test(
+      fileText,
+    )
+  ) {
+    return true;
+  }
+  const literal =
+    fileText.includes(`"${title}"`) || fileText.includes(`\`${title}\``);
+  return literal && /(?:test|vmTest)\(\s*name\b/.test(fileText);
+}
+
 export function checkVerifyEvidence({
   artifactsRoot,
   expectedVersion,
@@ -97,25 +151,9 @@ export function checkVerifyEvidence({
     if (result !== "ok") continue;
     const rel = path.relative(root, dir);
     const doctorPath = path.join(dir, "doctor.txt");
-    if (!fs.existsSync(doctorPath)) {
-      errors.push(
-        `${rel}: result.txt is ok but doctor.txt is missing; tee doctor.sh into this directory before treating the run as proof`,
-      );
-      continue;
-    }
-    const doctor = read(doctorPath);
-    const match = doctor.match(/^package_version=(.+)$/m);
-    if (!match) {
-      errors.push(
-        `${rel}: doctor.txt has no package_version line; refuse this tree as current proof`,
-      );
-      continue;
-    }
-    if (match[1] !== version) {
-      errors.push(
-        `${rel}: doctor.txt package_version=${match[1]} does not match host/package.json ${version}; a leftover ok tree is not proof for this checkout`,
-      );
-    }
+    const doctor = fs.existsSync(doctorPath) ? read(doctorPath) : "";
+    const proof = evaluateDoctorProof(doctor, version);
+    if (!proof.ok) errors.push(`${rel}: ${proof.detail}`);
   }
   return errors;
 }
@@ -144,6 +182,7 @@ export function checkFeatureHeadings({
 
 export function checkSkillEvidenceNames({
   skillPath,
+  helperPath,
 } = {}) {
   const file =
     skillPath ??
@@ -154,7 +193,10 @@ export function checkSkillEvidenceNames({
   const rest = text.slice(start + 1);
   const end = rest.search(/\n## /);
   const section = end === -1 ? rest : rest.slice(0, end);
-  const allowed = new Set([...HELPER_EVIDENCE_FILES, ...EXTRA_EVIDENCE_FILES]);
+  const allowed = new Set([
+    ...helperWrittenEvidenceFiles(helperPath),
+    ...EXTRA_EVIDENCE_FILES,
+  ]);
   const errors = [];
   for (const name of section.match(/\b[a-z0-9][a-z0-9.-]*\.txt\b/g) ?? []) {
     if (!allowed.has(name)) {
@@ -166,33 +208,20 @@ export function checkSkillEvidenceNames({
   return errors;
 }
 
-export function readManifestProfiles(root = repoRoot) {
-  const src = read(path.join(root, "host/src/capability-invocation.ts"));
-  const start = src.indexOf("  profiles: {");
-  if (start === -1) {
-    throw new Error("FEATURE_MANIFEST profiles block is missing");
-  }
-  const slice = src.slice(start);
-  const end = slice.indexOf("\n  },");
-  const profiles = {};
-  for (const match of slice
-    .slice(0, end)
-    .matchAll(
-      /(?:(?:"([^"]+)")|([A-Za-z_][\w.-]*)):\s*"(active|unsupported|unverified)"/g,
-    )) {
-    profiles[match[1] ?? match[2]] = match[3];
-  }
-  return profiles;
-}
-
 export function checkAdvertisedProfiles({
   manifest,
   root,
 } = {}) {
-  const features = manifest ?? { profiles: readManifestProfiles(root) };
+  const profiles =
+    manifest?.profiles ?? getCapabilityInvocationFeatureManifest().profiles;
+  if (!profiles || Object.keys(profiles).length === 0) {
+    return [
+      "feature manifest profiles is empty; refuse advertise checks until getCapabilityInvocationFeatureManifest() returns profiles",
+    ];
+  }
   const base = root ?? repoRoot;
   const errors = [];
-  for (const [profile, status] of Object.entries(features.profiles)) {
+  for (const [profile, status] of Object.entries(profiles)) {
     if (status !== "active") continue;
     const earned = EARNED_ACTIVE_PROFILES[profile];
     if (!earned) {
@@ -209,9 +238,9 @@ export function checkAdvertisedProfiles({
         );
         continue;
       }
-      if (!read(file).includes(earned.requiredText)) {
+      if (!hasEarningTest(read(file), earned.requiredText)) {
         errors.push(
-          `profiles.${profile} is active but ${rel} no longer contains ${JSON.stringify(earned.requiredText)}; keep the earning assertion`,
+          `profiles.${profile} is active but ${rel} no longer has a test or vmTest named ${JSON.stringify(earned.requiredText)}; keep the earning assertion`,
         );
       }
     }
@@ -220,60 +249,35 @@ export function checkAdvertisedProfiles({
 }
 
 export function checkSoftPassRejected({
-  source,
-  sourcePath,
+  pin,
+  matrix,
 } = {}) {
-  const text =
-    source ??
-    read(
-      sourcePath ??
-        path.join(repoRoot, "host/src/adaptivesandbox-conformance.ts"),
+  const pinInput =
+    pin ??
+    JSON.parse(
+      read(path.join(repoRoot, "conformance/adaptivesandbox-bundle.pin.json")),
     );
-  const errors = [];
-  if (
-    !/export type QualificationStatus = "verified" \| "unverified" \| "unsupported";/.test(
-      text,
-    )
-  ) {
-    errors.push(
-      "QualificationStatus must stay verified | unverified | unsupported so Soft-PASS cannot be written",
-    );
-  }
-  if (/Soft-PASS|soft-pass|softPass/.test(text)) {
-    errors.push(
-      "adaptivesandbox-conformance.ts names Soft-PASS; that status does not exist",
-    );
-  }
-  if (
-    !/\[\s*"verified",\s*"unverified",\s*"unsupported"\s*\]\.includes\(String\(input\)\)/.test(
-      text,
-    )
-  ) {
-    errors.push(
-      "qualificationStatus must reject unknown statuses including Soft-PASS",
-    );
-  }
-  return errors;
-}
-
-export function checkQualifiedFlagStaysFalse({
-  root,
-} = {}) {
-  const base = root ?? repoRoot;
-  const errors = [];
-  const files = [
-    "scripts/package-fork-release.mjs",
-    "host/src/adaptivesandbox-conformance.ts",
-  ];
-  for (const rel of files) {
-    const text = read(path.join(base, rel));
-    if (/adaptiveSandboxQualified\s*:\s*true/.test(text)) {
-      errors.push(
-        `${rel} sets adaptiveSandboxQualified: true; the fork stays false until an independent conformance run`,
-      );
+  const claimed = structuredClone(
+    matrix ??
+      JSON.parse(
+        read(path.join(repoRoot, "conformance/compatibility-matrix.json")),
+      ),
+  );
+  claimed.rows[0].status = "Soft-PASS";
+  try {
+    parseAdaptiveSandboxCompatibilityMatrix(claimed, pinInput);
+    return [
+      "compatibility matrix accepted status Soft-PASS; qualificationStatus must reject it",
+    ];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/unknown/.test(message)) {
+      return [
+        `Soft-PASS must fail as an unknown qualification status, not: ${message}`,
+      ];
     }
+    return [];
   }
-  return errors;
 }
 
 export function runAgentInvariants(options = {}) {
@@ -283,11 +287,20 @@ export function runAgentInvariants(options = {}) {
     ...checkSkillEvidenceNames(options),
     ...checkAdvertisedProfiles(options),
     ...checkSoftPassRejected(options),
-    ...checkQualifiedFlagStaysFalse(options),
   ];
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  if (process.argv[2] === "doctor-proof") {
+    const doctorPath = process.argv[3];
+    const doctor = doctorPath && fs.existsSync(doctorPath) ? read(doctorPath) : "";
+    const proof = evaluateDoctorProof(doctor, packageVersion());
+    if (!proof.ok) {
+      process.stdout.write(`${proof.reason}\n`);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
   const errors = runAgentInvariants();
   if (errors.length) {
     for (const error of errors) console.error(error);

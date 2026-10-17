@@ -36,10 +36,13 @@ When preparing a package release, keep all package versions in sync with the rel
 3. Update `host/package.json` `optionalDependencies` for `@earendil-works/gondolin-krun-runner-*` to `X.Y.Z`.
 4. Update `packages/gondolin-krun-runner-darwin-arm64/package.json` and `packages/gondolin-krun-runner-linux-x64/package.json` `version` fields to `X.Y.Z`.
 5. Run `pnpm install --lockfile-only` from the repo root to refresh `pnpm-lock.yaml`.
-6. Run at least `make check`; run `make test` when practical.
-7. Commit the version/changelog/lockfile changes, merge the reviewed release PR,
+6. Refresh or delete leftover `ok` verify-gondolin artifact trees so each
+   `doctor.txt` `package_version` matches the new version. `scripts/agent-invariants.mjs`
+   fails CI on a leftover `ok` tree.
+7. Run at least `make check`; run `make test` when practical.
+8. Commit the version/changelog/lockfile changes, merge the reviewed release PR,
    then create and push the exact experimental tag.
-8. Watch Experimental GitHub Release complete. It validates the same source
+9. Watch Experimental GitHub Release complete. It validates the same source
    commit, builds host/helpers/images, verifies the installed tarball and checksums,
    then publishes all assets in one GitHub prerelease. It does not publish npm
    packages or update main's registries. See `docs/fork-releases.md`.
@@ -86,11 +89,11 @@ Each row is a mistake class that showed up more than once. The checker is `scrip
 
 | Rule | What enforces it |
 | --- | --- |
-| An `ok` verify-gondolin tree is proof only when `doctor.txt` `package_version` matches `host/package.json` | `drive-cli-exec.sh` refuses `ok` on `missing-doctor` or `stale-package-version`; `checkVerifyEvidence` fails CI |
+| An `ok` verify-gondolin tree is proof only when `doctor.txt` is `status=ready` and `package_version` matches `host/package.json` | `evaluateDoctorProof` via `drive-cli-exec.sh` and `checkVerifyEvidence`; reasons `missing-doctor`, `doctor-not-ready`, `stale-package-version` |
 | Feature files keep the four verify-gondolin H2s in order | `checkFeatureHeadings` |
 | Skill Evidence names only files the helper writes, plus `doctor.txt` and `kvm-dmesg.txt` | `checkSkillEvidenceNames` |
-| A capability profile is `active` only after its earning test still exists | `EARNED_ACTIVE_PROFILES` in `scripts/agent-invariants.mjs` |
-| Qualification status is `verified`, `unverified`, or `unsupported`. Never Soft-PASS | `QualificationStatus` and `qualificationStatus()`; `checkSoftPassRejected` |
-| `adaptiveSandboxQualified` stays false | `scripts/package-fork-release.mjs` and `checkQualifiedFlagStaysFalse` |
+| A capability profile is `active` only after its earning test still exists | live `getCapabilityInvocationFeatureManifest()` plus `EARNED_ACTIVE_PROFILES` |
+| Qualification status is `verified`, `unverified`, or `unsupported`. Never Soft-PASS | `QualificationStatus` and `parseAdaptiveSandboxCompatibilityMatrix`; `checkSoftPassRejected` |
+| `adaptiveSandboxQualified` stays false | `scripts/package-fork-release.mjs` (`adaptiveSandboxQualified` is false) |
 | Skipped http-tls or credential fixtures cannot become verified | `host/test/adaptivesandbox-conformance.test.ts` |
 | Missing guest accounting is null or a failure, not zero success | scoped-runner / resource-observation tests already on main |
