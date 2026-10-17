@@ -11,3 +11,5 @@ ts	phase	decision	why	evidence	result
 2026-10-17T03:43:20Z	verify	re-proved cli-exec on QEMU TCG after shared doctor-proof	helper now calls evaluateDoctorProof; leftover ok trees still fail	.cursor/skills/verify-gondolin/artifacts/cli-exec/20261017T034202Z-16322/result.txt	result ok accel=tcg status=ready package_version=0.12.1-adaptivesandbox.12
 
 2026-10-17T03:49:10Z	fix	commented earning tests fail advertise; doctor-proof crash is doctor-proof-failed	Reviewer C Act On: title-in-comment and empty-stdout crash mapped to missing-doctor	scripts/agent-invariants.mjs drive-cli-exec.sh	tests 15/15 pass
+
+2026-10-17T03:51:00Z	verify	re-proved cli-exec after doctor-proof-failed wiring	doctor-proof no longer loads host TS; helper accepts only known fail reasons	.cursor/skills/verify-gondolin/artifacts/cli-exec/20261017T034931Z-18566/result.txt	result ok accel=tcg status=ready
