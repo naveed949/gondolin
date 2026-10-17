@@ -15,6 +15,7 @@ import {
   checkSoftPassRejected,
   checkVerifyEvidence,
   packageVersion,
+  readManifestProfiles,
   repoRoot,
   runAgentInvariants,
 } from "./agent-invariants.mjs";
@@ -133,6 +134,32 @@ test("an invented Evidence filename that the helper does not write is rejected",
     assert.ok(EXTRA_EVIDENCE_FILES.includes("doctor.txt"));
   } finally {
     fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  }
+});
+
+test("unquoted active profile keys are still parsed from the manifest", () => {
+  const root = tempDir("gondolin-unquoted-profile-");
+  try {
+    write(
+      path.join(root, "host/src/capability-invocation.ts"),
+      [
+        "  profiles: {\n",
+        '    "exact-reader": "active",\n',
+        '    invented: "active",\n',
+        '    writer: "unsupported",\n',
+        "  },\n",
+      ].join(""),
+    );
+    const profiles = readManifestProfiles(root);
+    assert.equal(profiles.invented, "active");
+    assert.equal(profiles.writer, "unsupported");
+    assert.ok(
+      checkAdvertisedProfiles({ manifest: { profiles }, root: repoRoot }).some(
+        (error) => /invented is active without an earning-test row/.test(error),
+      ),
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

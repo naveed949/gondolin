@@ -177,8 +177,10 @@ export function readManifestProfiles(root = repoRoot) {
   const profiles = {};
   for (const match of slice
     .slice(0, end)
-    .matchAll(/"([^"]+)": "(active|unsupported|unverified)"/g)) {
-    profiles[match[1]] = match[2];
+    .matchAll(
+      /(?:(?:"([^"]+)")|([A-Za-z_][\w.-]*)):\s*"(active|unsupported|unverified)"/g,
+    )) {
+    profiles[match[1] ?? match[2]] = match[3];
   }
   return profiles;
 }
