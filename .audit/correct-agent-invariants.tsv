@@ -7,3 +7,5 @@ ts	phase	decision	why	evidence	result
 2026-10-17T03:37:37Z	no-comments	deleted the drive-cli-exec.sh banner and left pre-existing ci.yml comments and the guest image touch	the touch and leftover CI comments are not from this change and rewriting image rebuild would widen the PR	bc-83f85712-875e-5ea7-9fc6-e6c664adf390	banner removed; CI touch left open
 
 2026-10-17T03:40:30Z	fix	live manifest/parser + shared evaluateDoctorProof for helper and CI	Reviewer A Act On: scrape and bash grep could accept Soft-PASS or skip status=ready	scripts/agent-invariants.mjs drive-cli-exec.sh	tests 12/12 pass; pin files untouched
+
+2026-10-17T03:43:20Z	verify	re-proved cli-exec on QEMU TCG after shared doctor-proof	helper now calls evaluateDoctorProof; leftover ok trees still fail	.cursor/skills/verify-gondolin/artifacts/cli-exec/20261017T034202Z-16322/result.txt	result ok accel=tcg status=ready package_version=0.12.1-adaptivesandbox.12
