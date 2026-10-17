@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Drive cli-exec once and write proof under artifacts/cli-exec/<run-id>/.
 set -euo pipefail
 
 HELPERS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
