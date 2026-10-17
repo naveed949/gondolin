@@ -89,9 +89,9 @@ Each row is a mistake class that showed up more than once. The checker is `scrip
 
 | Rule | What enforces it |
 | --- | --- |
-| An `ok` verify-gondolin tree is proof only when `doctor.txt` is `status=ready` and `package_version` matches `host/package.json` | `evaluateDoctorProof` via `drive-cli-exec.sh` `doctor-proof` and `checkVerifyEvidence`; reasons `missing-doctor`, `doctor-not-ready`, `missing-package-version`, `stale-package-version`. A checker crash is `doctor-proof-failed` |
+| An `ok` verify-gondolin tree is proof only when the last `doctor.txt` `status=` is `ready` and the last `package_version=` matches `host/package.json` | `evaluateDoctorProof` via `drive-cli-exec.sh` `doctor-proof` and `checkVerifyEvidence` |
 | Feature files keep the four verify-gondolin H2s in order | `checkFeatureHeadings` |
-| Skill Evidence names only files the helper writes, plus `doctor.txt` and `kvm-dmesg.txt` | `checkSkillEvidenceNames` |
+| Skill Evidence names only files the helper writes, plus `doctor.txt` and `kvm-dmesg.txt` | `checkSkillEvidenceNames` and `checkFeatureEvidenceNames`; helper allowlist is write redirections, not comments |
 | A capability profile is `active` only after its earning test still exists | live `getCapabilityInvocationFeatureManifest()` plus `EARNED_ACTIVE_PROFILES` |
 | Qualification status is `verified`, `unverified`, or `unsupported`. Never Soft-PASS | `QualificationStatus` and `parseAdaptiveSandboxCompatibilityMatrix`; `checkSoftPassRejected` |
 | `adaptiveSandboxQualified` stays false | `scripts/package-fork-release.mjs` (`adaptiveSandboxQualified` is false) |

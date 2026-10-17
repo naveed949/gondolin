@@ -24,7 +24,7 @@ Preconditions:
 - **Run the mounted command.** Run `.cursor/skills/verify-gondolin/helpers/drive-cli-exec.sh`. It executes `node host/dist/bin/gondolin.js exec --vmm qemu --mount-hostfs "$GONDOLIN_VERIFY_ROOT/workspace:/workspace" --env VERIFY_MARKER=gondolin-verify-$GONDOLIN_VERIFY_RUN_ID -- /bin/sh -lc 'printf "%s\n" "$VERIFY_MARKER" > /workspace/marker.txt && uname -s && cat /etc/os-release'`. Exit code `0`. Stdout contains a line `Linux` and the text `Alpine Linux`.
 - **Confirm the mount.** Read `$GONDOLIN_VERIFY_ROOT/workspace/marker.txt`. The file text is `gondolin-verify-$GONDOLIN_VERIFY_RUN_ID`.
 - **Confirm the session ended.** Run `node host/dist/bin/gondolin.js list` with the same `GONDOLIN_SESSIONS_DIR`. Stdout is `No running sessions.`
-- **Proof.** The helper writes `command.txt`, `stdout.txt`, `stderr.txt`, `exit-code.txt`, `marker-host.txt`, `list-after.txt`, and `result.txt` under `.cursor/skills/verify-gondolin/artifacts/cli-exec/$GONDOLIN_VERIFY_RUN_ID/`. `result.txt` is `ok` only when `doctor.txt` exists, `status=ready`, and `package_version` matches `host/package.json`.
+- **Proof.** The helper writes `command.txt`, `stdout.txt`, `stderr.txt`, `exit-code.txt`, `marker-host.txt`, `list-after.txt`, and `result.txt` under `.cursor/skills/verify-gondolin/artifacts/cli-exec/$GONDOLIN_VERIFY_RUN_ID/`. `result.txt` is `ok` only when `doctor.txt` exists, the last `status=` is `ready`, and the last `package_version=` matches `host/package.json`.
 
 ## Gotchas
 

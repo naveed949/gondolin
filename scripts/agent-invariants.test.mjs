@@ -11,6 +11,7 @@ import {
   EXTRA_EVIDENCE_FILES,
   FEATURE_HEADINGS,
   checkAdvertisedProfiles,
+  checkFeatureEvidenceNames,
   checkFeatureHeadings,
   checkSkillEvidenceNames,
   checkSoftPassRejected,
@@ -73,6 +74,20 @@ test("evaluateDoctorProof requires a ready doctor for this package version", () 
       version,
     ),
     { ok: true, reason: null, detail: null },
+  );
+  assert.equal(
+    evaluateDoctorProof(
+      `package_version=${version}\nstatus=ready\nstatus=refuse\nreason=live session\n`,
+      version,
+    ).reason,
+    "doctor-not-ready",
+  );
+  assert.equal(
+    evaluateDoctorProof(
+      `status=ready\npackage_version=${version}\npackage_version=0.12.1-adaptivesandbox.10\n`,
+      version,
+    ).reason,
+    "stale-package-version",
   );
 });
 
@@ -171,6 +186,75 @@ test("feature files missing the verify-gondolin H2s fail the heading gate", () =
     for (const heading of FEATURE_HEADINGS) {
       assert.match(errors[0], new RegExp(heading.replace(/[()]/g, "\\$&")));
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a helper comment does not allow an invented Evidence name", () => {
+  const dir = tempDir("gondolin-helper-comment-");
+  try {
+    const helperPath = path.join(dir, "drive-cli-exec.sh");
+    const skillPath = path.join(dir, "SKILL.md");
+    write(
+      helperPath,
+      '# $EVIDENCE/image-size.txt\necho ok >"$EVIDENCE/result.txt"\n',
+    );
+    write(
+      skillPath,
+      [
+        "# Verify Gondolin\n",
+        "## Evidence\n",
+        "- `result.txt` is `ok`\n",
+        "- `image-size.txt` records the compressed alpine-base size\n",
+        "## Cleanup\n",
+      ].join(""),
+    );
+    const errors = checkSkillEvidenceNames({ skillPath, helperPath });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /image-size\.txt/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Evidence names keep underscores and capitals", () => {
+  const file = path.join(tempDir("gondolin-underscore-"), "SKILL.md");
+  try {
+    write(
+      file,
+      [
+        "# Verify Gondolin\n",
+        "## Evidence\n",
+        "- `image_size.txt` and `Image-size.txt`\n",
+        "## Cleanup\n",
+      ].join(""),
+    );
+    const errors = checkSkillEvidenceNames({ skillPath: file });
+    assert.ok(errors.some((error) => /image_size\.txt/.test(error)));
+    assert.ok(errors.some((error) => /Image-size\.txt/.test(error)));
+  } finally {
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  }
+});
+
+test("an invented Proof filename in a feature file is rejected", () => {
+  const dir = tempDir("gondolin-feature-proof-");
+  try {
+    write(
+      path.join(dir, "cli-exec.md"),
+      [
+        "# Run a command\n",
+        "## Sub-features\n",
+        "## How to get to it (user POV)\n",
+        "## Driving it with verify-gondolin\n",
+        "- **Proof.** Save `image-size.txt`.\n",
+        "## Gotchas\n",
+      ].join(""),
+    );
+    const errors = checkFeatureEvidenceNames({ featuresDir: dir });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /image-size\.txt/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -309,6 +393,45 @@ test("a skipped or string-wrapped earning title is not enough to advertise", asy
       root,
     });
     assert.equal(wrapped.length, 1);
+    write(
+      path.join(root, rel),
+      `test("${title}", { timeout: 1, skip: true }, async () => {});\n`,
+    );
+    assert.equal(
+      (
+        await checkAdvertisedProfiles({
+          manifest: { profiles: { "exact-reader": "active" } },
+          root,
+        })
+      ).length,
+      1,
+    );
+    write(
+      path.join(root, rel),
+      `test("${title}", { skip: "needs kvm" }, async () => {});\n`,
+    );
+    assert.equal(
+      (
+        await checkAdvertisedProfiles({
+          manifest: { profiles: { "exact-reader": "active" } },
+          root,
+        })
+      ).length,
+      1,
+    );
+    write(
+      path.join(root, rel),
+      `const re = /test("${title}", () => {})/;\n`,
+    );
+    assert.equal(
+      (
+        await checkAdvertisedProfiles({
+          manifest: { profiles: { "exact-reader": "active" } },
+          root,
+        })
+      ).length,
+      1,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

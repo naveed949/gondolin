@@ -81,14 +81,23 @@ function defaultHelperPath() {
   );
 }
 
+const EVIDENCE_NAME = /\b[A-Za-z0-9][A-Za-z0-9._-]*\.txt\b/g;
+
 export function helperWrittenEvidenceFiles(helperPath = defaultHelperPath()) {
   const names = new Set();
   for (const match of read(helperPath).matchAll(
-    /\$EVIDENCE\/([A-Za-z0-9.-]+\.txt)/g,
+    /(?:>>?|2>>?)\s*"?\$EVIDENCE\/([A-Za-z0-9._-]+\.txt)/g,
   )) {
     names.add(match[1]);
   }
   return names;
+}
+
+function lastAssignment(text, key) {
+  let last;
+  const pattern = new RegExp(`^${key}=(.*)$`, "gm");
+  for (const match of text.matchAll(pattern)) last = match[1];
+  return last;
 }
 
 export function evaluateDoctorProof(doctorText, version) {
@@ -100,15 +109,16 @@ export function evaluateDoctorProof(doctorText, version) {
         "doctor.txt is missing; tee doctor.sh into this directory before treating the run as proof",
     };
   }
-  if (!/^status=ready$/m.test(doctorText)) {
+  const status = lastAssignment(doctorText, "status");
+  if (status !== "ready") {
     return {
       ok: false,
       reason: "doctor-not-ready",
       detail: "doctor.txt status is not ready; refuse this tree as current proof",
     };
   }
-  const match = doctorText.match(/^package_version=(.*)$/m);
-  if (!match) {
+  const recorded = lastAssignment(doctorText, "package_version");
+  if (recorded == null) {
     return {
       ok: false,
       reason: "missing-package-version",
@@ -116,11 +126,11 @@ export function evaluateDoctorProof(doctorText, version) {
         "doctor.txt has no package_version line; refuse this tree as current proof",
     };
   }
-  if (match[1] !== version) {
+  if (recorded !== version) {
     return {
       ok: false,
       reason: "stale-package-version",
-      detail: `doctor.txt package_version=${match[1]} does not match host/package.json ${version}; a leftover ok tree is not proof for this checkout`,
+      detail: `doctor.txt package_version=${recorded} does not match host/package.json ${version}; a leftover ok tree is not proof for this checkout`,
     };
   }
   return { ok: true, reason: null, detail: null };
@@ -182,6 +192,36 @@ function earningTestCalls(source) {
       i += 2;
       continue;
     }
+    if (c === "/" && n !== "*" && n !== "/") {
+      let prev = i - 1;
+      while (prev >= 0 && /\s/.test(source[prev])) prev -= 1;
+      const before = prev < 0 ? "" : source[prev];
+      if (prev < 0 || "(=:,[!&|?{};".includes(before)) {
+        i += 1;
+        while (i < source.length) {
+          if (source[i] === "\\") {
+            i += 2;
+            continue;
+          }
+          if (source[i] === "[") {
+            i += 1;
+            while (i < source.length && source[i] !== "]") {
+              if (source[i] === "\\") i += 2;
+              else i += 1;
+            }
+            i += 1;
+            continue;
+          }
+          if (source[i] === "/") {
+            i += 1;
+            while (/[gimsuy]/.test(source[i])) i += 1;
+            break;
+          }
+          i += 1;
+        }
+        continue;
+      }
+    }
     if (c === "'") {
       state = "sq";
       i += 1;
@@ -226,16 +266,29 @@ function earningTestCalls(source) {
         i += 1;
       }
       i += 1;
-      const after = source.slice(i, i + 120);
       calls.push({
         title,
-        skipTrue: /,\s*\{\s*skip\s*:\s*true\b/.test(after),
+        skipTrue: optionsSkipLiteral(source.slice(i, i + 240)),
       });
       continue;
     }
     i += 1;
   }
   return calls;
+}
+
+function optionsSkipLiteral(after) {
+  const comma = after.search(/\S/);
+  if (comma === -1 || after[comma] !== ",") return false;
+  let rest = after.slice(comma + 1);
+  rest = rest.replace(/^\s*/, "");
+  if (!rest.startsWith("{")) return false;
+  const close = rest.indexOf("}");
+  if (close === -1) return false;
+  const body = rest.slice(1, close);
+  if (/\bskip\s*:\s*false\b/.test(body)) return false;
+  if (/\bskip\s*:\s*true\b/.test(body)) return true;
+  return /\bskip\s*:\s*(["'`]|[\d])/.test(body);
 }
 
 function hasEarningTest(fileText, title) {
@@ -301,17 +354,50 @@ export function checkSkillEvidenceNames({
   if (start === -1) return ["SKILL.md has no Evidence heading"];
   const rest = text.slice(start + 1);
   const end = rest.search(/\n## /);
-  const section = end === -1 ? rest : rest.slice(0, end);
-  const allowed = new Set([
-    ...helperWrittenEvidenceFiles(helperPath),
-    ...EXTRA_EVIDENCE_FILES,
-  ]);
+  const section = stripFences(end === -1 ? rest : rest.slice(0, end));
+  const allowed = evidenceAllowlist(helperPath);
   const errors = [];
-  for (const name of section.match(/\b[a-z0-9][a-z0-9.-]*\.txt\b/g) ?? []) {
+  for (const name of section.match(EVIDENCE_NAME) ?? []) {
     if (!allowed.has(name)) {
       errors.push(
         `SKILL.md Evidence names ${name}; drive-cli-exec.sh does not write that file. Drop the invented rule or add the file to the helper first`,
       );
+    }
+  }
+  return errors;
+}
+
+function stripFences(text) {
+  return text.replace(/```[\s\S]*?```/g, "");
+}
+
+function evidenceAllowlist(helperPath) {
+  return new Set([
+    ...helperWrittenEvidenceFiles(helperPath),
+    ...EXTRA_EVIDENCE_FILES,
+  ]);
+}
+
+export function checkFeatureEvidenceNames({
+  featuresDir,
+  helperPath,
+} = {}) {
+  const dir =
+    featuresDir ??
+    path.join(repoRoot, ".cursor/skills/verify-gondolin/features");
+  const allowed = evidenceAllowlist(helperPath);
+  const errors = [];
+  for (const name of fs.readdirSync(dir).sort()) {
+    if (!name.endsWith(".md") || name === "README.md") continue;
+    for (const line of read(path.join(dir, name)).split("\n")) {
+      if (!/\*\*Proof\.\*\*/.test(line)) continue;
+      for (const file of line.match(EVIDENCE_NAME) ?? []) {
+        if (!allowed.has(file)) {
+          errors.push(
+            `${name}: Proof names ${file}; drive-cli-exec.sh does not write that file`,
+          );
+        }
+      }
     }
   }
   return errors;
@@ -402,6 +488,7 @@ export async function runAgentInvariants(options = {}) {
     ...checkVerifyEvidence(options),
     ...checkFeatureHeadings(options),
     ...checkSkillEvidenceNames(options),
+    ...checkFeatureEvidenceNames(options),
     ...(await checkAdvertisedProfiles(options)),
     ...(await checkSoftPassRejected(options)),
   ];
