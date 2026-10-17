@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  DOCTOR_FAIL_REASONS,
   EARNED_ACTIVE_PROFILES,
   EXTRA_EVIDENCE_FILES,
   FEATURE_HEADINGS,
@@ -13,6 +14,7 @@ import {
   checkSkillEvidenceNames,
   checkSoftPassRejected,
   checkVerifyEvidence,
+  classifyDoctorProofFailure,
   evaluateDoctorProof,
   helperWrittenEvidenceFiles,
   packageVersion,
@@ -29,8 +31,8 @@ function write(file, text) {
   fs.writeFileSync(file, text);
 }
 
-test("current checkout satisfies the agent invariant gates", () => {
-  assert.deepEqual(runAgentInvariants(), []);
+test("current checkout satisfies the agent invariant gates", async () => {
+  assert.deepEqual(await runAgentInvariants(), []);
 });
 
 test("evaluateDoctorProof requires a ready doctor for this package version", () => {
@@ -197,9 +199,9 @@ test("an invented Evidence filename that the helper does not write is rejected",
   }
 });
 
-test("the live feature manifest is the advertise source", () => {
-  assert.deepEqual(checkAdvertisedProfiles(), []);
-  const errors = checkAdvertisedProfiles({
+test("the live feature manifest is the advertise source", async () => {
+  assert.deepEqual(await checkAdvertisedProfiles(), []);
+  const errors = await checkAdvertisedProfiles({
     manifest: {
       profiles: {
         invented: "active",
@@ -213,8 +215,8 @@ test("the live feature manifest is the advertise source", () => {
   );
 });
 
-test("advertising a profile without its earning test is rejected", () => {
-  const errors = checkAdvertisedProfiles({
+test("advertising a profile without its earning test is rejected", async () => {
+  const errors = await checkAdvertisedProfiles({
     manifest: {
       profiles: {
         "scoped-tree-runner": "active",
@@ -230,12 +232,12 @@ test("advertising a profile without its earning test is rejected", () => {
   );
 });
 
-test("advertising scoped-tree-runner after dropping the denial title is rejected", () => {
+test("advertising scoped-tree-runner after dropping the denial title is rejected", async () => {
   const root = tempDir("gondolin-advertise-");
   try {
     const rel = EARNED_ACTIVE_PROFILES["scoped-tree-runner"].files[0];
     write(path.join(root, rel), 'const name = "unrelated success path";\n');
-    const errors = checkAdvertisedProfiles({
+    const errors = await checkAdvertisedProfiles({
       manifest: { profiles: { "scoped-tree-runner": "active" } },
       root,
     });
@@ -246,6 +248,51 @@ test("advertising scoped-tree-runner after dropping the denial title is rejected
   }
 });
 
-test("Soft-PASS is rejected by the live compatibility-matrix parser", () => {
-  assert.deepEqual(checkSoftPassRejected(), []);
+test("a commented-out earning test is not enough to advertise", async () => {
+  const root = tempDir("gondolin-commented-earn-");
+  try {
+    const rel = EARNED_ACTIVE_PROFILES["scoped-tree-runner"].files[0];
+    const title = EARNED_ACTIVE_PROFILES["scoped-tree-runner"].requiredText;
+    write(path.join(root, rel), `// vmTest("${title}", async () => {});\n`);
+    const errors = await checkAdvertisedProfiles({
+      manifest: { profiles: { "scoped-tree-runner": "active" } },
+      root,
+    });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /denies cross-directory rename/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an unused title next to test(name) is not enough to advertise", async () => {
+  const root = tempDir("gondolin-detached-earn-");
+  try {
+    const rel = EARNED_ACTIVE_PROFILES["https-request"].files[0];
+    const title = EARNED_ACTIVE_PROFILES["https-request"].requiredText;
+    write(
+      path.join(root, rel),
+      `const leftover = "${title}";\ntest(name, () => {});\n`,
+    );
+    const errors = await checkAdvertisedProfiles({
+      manifest: { profiles: { "https-request": "active" } },
+      root,
+    });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /HTTPS VM public TLS/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Soft-PASS is rejected by the live compatibility-matrix parser", async () => {
+  assert.deepEqual(await checkSoftPassRejected(), []);
+});
+
+test("a checker crash is not recorded as missing-doctor", () => {
+  assert.equal(classifyDoctorProofFailure(""), "doctor-proof-failed");
+  assert.equal(classifyDoctorProofFailure("ENOENT\n"), "doctor-proof-failed");
+  for (const reason of DOCTOR_FAIL_REASONS) {
+    assert.equal(classifyDoctorProofFailure(`${reason}\n`), reason);
+  }
 });

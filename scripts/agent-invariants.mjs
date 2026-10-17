@@ -4,9 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseAdaptiveSandboxCompatibilityMatrix } from "../host/src/adaptivesandbox-conformance.ts";
-import { getCapabilityInvocationFeatureManifest } from "../host/src/capability-invocation.ts";
-
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(here, "..");
 
@@ -18,6 +15,12 @@ export const FEATURE_HEADINGS = [
 ];
 
 export const EXTRA_EVIDENCE_FILES = ["doctor.txt", "kvm-dmesg.txt"];
+
+export const DOCTOR_FAIL_REASONS = [
+  "missing-doctor",
+  "doctor-not-ready",
+  "stale-package-version",
+];
 
 export const EARNED_ACTIVE_PROFILES = {
   "exact-reader": {
@@ -121,18 +124,101 @@ export function evaluateDoctorProof(doctorText, version) {
   return { ok: true, reason: null, detail: null };
 }
 
+export function classifyDoctorProofFailure(stdout) {
+  const reason = String(stdout ?? "").trim();
+  if (DOCTOR_FAIL_REASONS.includes(reason)) return reason;
+  return "doctor-proof-failed";
+}
+
+function stripTsComments(text) {
+  let out = "";
+  let i = 0;
+  let state = "code";
+  while (i < text.length) {
+    const c = text[i];
+    const n = text[i + 1];
+    if (state === "code") {
+      if (c === "/" && n === "/") {
+        state = "line";
+        i += 2;
+        continue;
+      }
+      if (c === "/" && n === "*") {
+        state = "block";
+        i += 2;
+        continue;
+      }
+      if (c === "'") {
+        state = "sq";
+        out += c;
+        i += 1;
+        continue;
+      }
+      if (c === '"') {
+        state = "dq";
+        out += c;
+        i += 1;
+        continue;
+      }
+      if (c === "`") {
+        state = "bt";
+        out += c;
+        i += 1;
+        continue;
+      }
+      out += c;
+      i += 1;
+      continue;
+    }
+    if (state === "line") {
+      if (c === "\n") {
+        state = "code";
+        out += c;
+      }
+      i += 1;
+      continue;
+    }
+    if (state === "block") {
+      if (c === "*" && n === "/") {
+        state = "code";
+        i += 2;
+        continue;
+      }
+      if (c === "\n") out += c;
+      i += 1;
+      continue;
+    }
+    if (c === "\\") {
+      out += c + (n ?? "");
+      i += 2;
+      continue;
+    }
+    out += c;
+    if (
+      (state === "sq" && c === "'") ||
+      (state === "dq" && c === '"') ||
+      (state === "bt" && c === "`")
+    ) {
+      state = "code";
+    }
+    i += 1;
+  }
+  return out;
+}
+
 function hasEarningTest(fileText, title) {
+  const source = stripTsComments(fileText);
   const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (
     new RegExp(String.raw`(?:test|vmTest)\(\s*["\`]${escaped}["\`]`).test(
-      fileText,
+      source,
     )
   ) {
     return true;
   }
-  const literal =
-    fileText.includes(`"${title}"`) || fileText.includes(`\`${title}\``);
-  return literal && /(?:test|vmTest)\(\s*name\b/.test(fileText);
+  return new RegExp(
+    String.raw`\[[^\]]{0,240}["\`]${escaped}["\`][^\]]{0,80}\][\s\S]{0,400}(?:test|vmTest)\(\s*name\b`,
+  ).test(source);
 }
 
 export function checkVerifyEvidence({
@@ -208,12 +294,17 @@ export function checkSkillEvidenceNames({
   return errors;
 }
 
-export function checkAdvertisedProfiles({
+export async function checkAdvertisedProfiles({
   manifest,
   root,
 } = {}) {
-  const profiles =
-    manifest?.profiles ?? getCapabilityInvocationFeatureManifest().profiles;
+  let profiles = manifest?.profiles;
+  if (!profiles) {
+    const { getCapabilityInvocationFeatureManifest } = await import(
+      "../host/src/capability-invocation.ts"
+    );
+    profiles = getCapabilityInvocationFeatureManifest().profiles;
+  }
   if (!profiles || Object.keys(profiles).length === 0) {
     return [
       "feature manifest profiles is empty; refuse advertise checks until getCapabilityInvocationFeatureManifest() returns profiles",
@@ -248,10 +339,13 @@ export function checkAdvertisedProfiles({
   return errors;
 }
 
-export function checkSoftPassRejected({
+export async function checkSoftPassRejected({
   pin,
   matrix,
 } = {}) {
+  const { parseAdaptiveSandboxCompatibilityMatrix } = await import(
+    "../host/src/adaptivesandbox-conformance.ts"
+  );
   const pinInput =
     pin ??
     JSON.parse(
@@ -280,28 +374,34 @@ export function checkSoftPassRejected({
   }
 }
 
-export function runAgentInvariants(options = {}) {
+export async function runAgentInvariants(options = {}) {
   return [
     ...checkVerifyEvidence(options),
     ...checkFeatureHeadings(options),
     ...checkSkillEvidenceNames(options),
-    ...checkAdvertisedProfiles(options),
-    ...checkSoftPassRejected(options),
+    ...(await checkAdvertisedProfiles(options)),
+    ...(await checkSoftPassRejected(options)),
   ];
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === "doctor-proof") {
-    const doctorPath = process.argv[3];
-    const doctor = doctorPath && fs.existsSync(doctorPath) ? read(doctorPath) : "";
-    const proof = evaluateDoctorProof(doctor, packageVersion());
-    if (!proof.ok) {
-      process.stdout.write(`${proof.reason}\n`);
+    try {
+      const doctorPath = process.argv[3];
+      const doctor =
+        doctorPath && fs.existsSync(doctorPath) ? read(doctorPath) : "";
+      const proof = evaluateDoctorProof(doctor, packageVersion());
+      if (!proof.ok) {
+        process.stdout.write(`${proof.reason}\n`);
+        process.exit(1);
+      }
+      process.exit(0);
+    } catch {
+      process.stdout.write("doctor-proof-failed\n");
       process.exit(1);
     }
-    process.exit(0);
   }
-  const errors = runAgentInvariants();
+  const errors = await runAgentInvariants();
   if (errors.length) {
     for (const error of errors) console.error(error);
     process.exit(1);

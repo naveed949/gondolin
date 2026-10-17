@@ -89,7 +89,7 @@ Each row is a mistake class that showed up more than once. The checker is `scrip
 
 | Rule | What enforces it |
 | --- | --- |
-| An `ok` verify-gondolin tree is proof only when `doctor.txt` is `status=ready` and `package_version` matches `host/package.json` | `evaluateDoctorProof` via `drive-cli-exec.sh` and `checkVerifyEvidence`; reasons `missing-doctor`, `doctor-not-ready`, `stale-package-version` |
+| An `ok` verify-gondolin tree is proof only when `doctor.txt` is `status=ready` and `package_version` matches `host/package.json` | `evaluateDoctorProof` via `drive-cli-exec.sh` and `checkVerifyEvidence`; reasons `missing-doctor`, `doctor-not-ready`, `stale-package-version`. A checker crash is `doctor-proof-failed`, not `missing-doctor` |
 | Feature files keep the four verify-gondolin H2s in order | `checkFeatureHeadings` |
 | Skill Evidence names only files the helper writes, plus `doctor.txt` and `kvm-dmesg.txt` | `checkSkillEvidenceNames` |
 | A capability profile is `active` only after its earning test still exists | live `getCapabilityInvocationFeatureManifest()` plus `EARNED_ACTIVE_PROFILES` |

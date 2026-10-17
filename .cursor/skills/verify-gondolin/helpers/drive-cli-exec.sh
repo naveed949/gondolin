@@ -142,7 +142,14 @@ if [[ ${#failures[@]} -eq 0 ]]; then
   doctor_status=$?
   set -e
   if [[ "$doctor_status" -ne 0 ]]; then
-    failures+=("${doctor_reason:-missing-doctor}")
+    case "$doctor_reason" in
+      missing-doctor|doctor-not-ready|stale-package-version)
+        failures+=("$doctor_reason")
+        ;;
+      *)
+        failures+=("doctor-proof-failed")
+        ;;
+    esac
   fi
 fi
 if [[ ${#failures[@]} -eq 0 ]]; then

@@ -9,7 +9,9 @@ All notable changes to Gondolin are documented here.
   `host/package.json`; on advertised capability profiles that drop their earning
   tests; and on `Soft-PASS` as a qualification status. Doctor proof is one
   function shared by the helper and CI. Advertise and Soft-PASS checks call the
-  live feature manifest and compatibility-matrix parser.
+  live feature manifest and compatibility-matrix parser. A commented-out
+  earning test is not enough to advertise. A `doctor-proof` crash is
+  `doctor-proof-failed`, not `missing-doctor`.
   `adaptiveSandboxQualified` stays false.
 
 ## 0.12.1-adaptivesandbox.12
