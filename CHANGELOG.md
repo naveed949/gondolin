@@ -4,6 +4,11 @@ All notable changes to Gondolin are documented here.
 
 ## Unreleased
 
+- Fail closed on leftover verify-gondolin `ok` artifacts whose `doctor.txt`
+  package version does not match `host/package.json`, on advertised capability
+  profiles that drop their earning tests, and on `Soft-PASS` as a qualification
+  status. `adaptiveSandboxQualified` stays false.
+
 ## 0.12.1-adaptivesandbox.12
 
 - Fix an intermittent host `SIGSEGV` in scoped-tree `openat2` and `getdents64`.

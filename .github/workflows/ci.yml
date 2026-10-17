@@ -44,6 +44,9 @@ jobs:
       - name: Test fork release packaging
         run: node --test scripts/package-fork-release.test.mjs
 
+      - name: Test repeating-agent invariant gates
+        run: node --test scripts/agent-invariants.test.mjs
+
       - name: Typecheck host
         run: pnpm --filter @earendil-works/gondolin exec tsc --noEmit
 

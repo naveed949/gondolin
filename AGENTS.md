@@ -79,3 +79,18 @@ Use `/** … */` above TS properties and `/// …` above Zig fields. Keep commen
 ## Important: Preserving Working Tree Changes
 
 **Do NOT run `git checkout` or `git restore` on files without explicit user approval.** If you notice uncommitted changes that seem unrelated to your task, ask the user before discarding them. Previous sessions have had agents accidentally reset intentional working-tree changes.
+
+## Repeating-agent rules
+
+Each row is a mistake class that showed up more than once. The checker is `scripts/agent-invariants.mjs`. Add a row only when a new class repeats. Drop a row when the mistake can no longer be written.
+
+| Rule | What enforces it |
+| --- | --- |
+| An `ok` verify-gondolin tree is proof only when `doctor.txt` `package_version` matches `host/package.json` | `drive-cli-exec.sh` refuses `ok` on `missing-doctor` or `stale-package-version`; `checkVerifyEvidence` fails CI |
+| Feature files keep the four verify-gondolin H2s in order | `checkFeatureHeadings` |
+| Skill Evidence names only files the helper writes, plus `doctor.txt` and `kvm-dmesg.txt` | `checkSkillEvidenceNames` |
+| A capability profile is `active` only after its earning test still exists | `EARNED_ACTIVE_PROFILES` in `scripts/agent-invariants.mjs` |
+| Qualification status is `verified`, `unverified`, or `unsupported`. Never Soft-PASS | `QualificationStatus` and `qualificationStatus()`; `checkSoftPassRejected` |
+| `adaptiveSandboxQualified` stays false | `scripts/package-fork-release.mjs` and `checkQualifiedFlagStaysFalse` |
+| Skipped http-tls or credential fixtures cannot become verified | `host/test/adaptivesandbox-conformance.test.ts` |
+| Missing guest accounting is null or a failure, not zero success | scoped-runner / resource-observation tests already on main |
