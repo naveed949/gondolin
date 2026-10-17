@@ -1,0 +1,1 @@
+node /workspace/host/dist/bin/gondolin.js exec --vmm qemu --mount-hostfs /tmp/gondolin-verify-20261017T033511Z-10872/workspace:/workspace --env VERIFY_MARKER=gondolin-verify-20261017T033511Z-10872 -- /bin/sh -lc printf\ \"%s\\n\"\ \"\$VERIFY_MARKER\"\ \>\ /workspace/marker.txt\ \&\&\ uname\ -s\ \&\&\ cat\ /etc/os-release 

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Drive cli-exec once and write proof under artifacts/cli-exec/<run-id>/.
 set -euo pipefail
 
 HELPERS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -136,6 +135,15 @@ if [[ "$got" != "$MARKER" ]]; then
 fi
 if ! grep -q '^No running sessions\.$' "$EVIDENCE/list-after.txt"; then
   failures+=(session-left-running)
+fi
+if [[ ${#failures[@]} -eq 0 ]]; then
+  set +e
+  doctor_reason=$(node "$REPO/scripts/agent-invariants.mjs" doctor-proof "$EVIDENCE/doctor.txt")
+  doctor_status=$?
+  set -e
+  if [[ "$doctor_status" -ne 0 ]]; then
+    failures+=("${doctor_reason:-doctor-proof-failed}")
+  fi
 fi
 if [[ ${#failures[@]} -eq 0 ]]; then
   result=ok

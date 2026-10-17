@@ -97,11 +97,11 @@ Proof for a drive is the command, stdout, stderr, exit code, and a second view o
 - `command.txt`, `stdout.txt`, `stderr.txt`, `exit-code.txt`
 - `marker-expected.txt`, `marker-host.txt`
 - `list-after.txt`, `list-after.stderr.txt`, `list-after.exit-code.txt`
-- `meta.txt`, `result.txt` (`ok` when every check passed)
-- `doctor.txt` when doctor was teed as shown above
+- `meta.txt`, `result.txt` (`ok` when every check passed, including a matching ready `doctor.txt`)
+- `doctor.txt` when doctor was teed as shown above. An `ok` result requires this file, the last `status=` line to be `ready`, and the last `package_version=` line equal to `host/package.json`. Missing, not-ready, missing-version, or stale doctor becomes `missing-doctor`, `doctor-not-ready`, `missing-package-version`, or `stale-package-version` in `result.txt`. A `doctor-proof` crash is `doctor-proof-failed`.
 - `kvm-dmesg.txt` when doctor printed `accel=kvm` and guest readiness timed out. Capture filtered `dmesg` by hand. `drive-cli-exec.sh` does not write this file.
 
-`result.txt` other than `ok` means that run is not proof. Record the feature id that was actually driven. An entry point that was not run stays **UNVERIFIED**. A directory whose `doctor.txt` `package_version` does not match `host/package.json` is not proof for this checkout.
+`result.txt` other than `ok` means that run is not proof. Record the feature id that was actually driven. An entry point that was not run stays **UNVERIFIED**. A directory whose `doctor.txt` is missing, not `status=ready`, or whose `package_version` does not match `host/package.json` is not proof for this checkout.
 
 ## Cleanup
 
