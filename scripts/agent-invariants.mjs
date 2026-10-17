@@ -19,6 +19,7 @@ export const EXTRA_EVIDENCE_FILES = ["doctor.txt", "kvm-dmesg.txt"];
 export const DOCTOR_FAIL_REASONS = [
   "missing-doctor",
   "doctor-not-ready",
+  "missing-package-version",
   "stale-package-version",
 ];
 
@@ -110,8 +111,9 @@ export function evaluateDoctorProof(doctorText, version) {
   if (!match) {
     return {
       ok: false,
-      reason: "missing-doctor",
-      detail: "doctor.txt has no package_version line; refuse this tree as current proof",
+      reason: "missing-package-version",
+      detail:
+        "doctor.txt has no package_version line; refuse this tree as current proof",
     };
   }
   if (match[1] !== version) {
@@ -130,51 +132,19 @@ export function classifyDoctorProofFailure(stdout) {
   return "doctor-proof-failed";
 }
 
-function stripTsComments(text) {
-  let out = "";
+function isIdentChar(ch) {
+  return /[A-Za-z0-9_$]/.test(ch);
+}
+
+function earningTestCalls(source) {
+  const calls = [];
   let i = 0;
   let state = "code";
-  while (i < text.length) {
-    const c = text[i];
-    const n = text[i + 1];
-    if (state === "code") {
-      if (c === "/" && n === "/") {
-        state = "line";
-        i += 2;
-        continue;
-      }
-      if (c === "/" && n === "*") {
-        state = "block";
-        i += 2;
-        continue;
-      }
-      if (c === "'") {
-        state = "sq";
-        out += c;
-        i += 1;
-        continue;
-      }
-      if (c === '"') {
-        state = "dq";
-        out += c;
-        i += 1;
-        continue;
-      }
-      if (c === "`") {
-        state = "bt";
-        out += c;
-        i += 1;
-        continue;
-      }
-      out += c;
-      i += 1;
-      continue;
-    }
+  while (i < source.length) {
+    const c = source[i];
+    const n = source[i + 1];
     if (state === "line") {
-      if (c === "\n") {
-        state = "code";
-        out += c;
-      }
+      if (c === "\n") state = "code";
       i += 1;
       continue;
     }
@@ -184,41 +154,94 @@ function stripTsComments(text) {
         i += 2;
         continue;
       }
-      if (c === "\n") out += c;
       i += 1;
       continue;
     }
-    if (c === "\\") {
-      out += c + (n ?? "");
+    if (state === "sq" || state === "dq" || state === "bt") {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (
+        (state === "sq" && c === "'") ||
+        (state === "dq" && c === '"') ||
+        (state === "bt" && c === "`")
+      ) {
+        state = "code";
+      }
+      i += 1;
+      continue;
+    }
+    if (c === "/" && n === "/") {
+      state = "line";
       i += 2;
       continue;
     }
-    out += c;
+    if (c === "/" && n === "*") {
+      state = "block";
+      i += 2;
+      continue;
+    }
+    if (c === "'") {
+      state = "sq";
+      i += 1;
+      continue;
+    }
+    if (c === '"') {
+      state = "dq";
+      i += 1;
+      continue;
+    }
+    if (c === "`") {
+      state = "bt";
+      i += 1;
+      continue;
+    }
+    const kind = source.startsWith("vmTest", i)
+      ? "vmTest"
+      : source.startsWith("test", i)
+        ? "test"
+        : null;
     if (
-      (state === "sq" && c === "'") ||
-      (state === "dq" && c === '"') ||
-      (state === "bt" && c === "`")
+      kind &&
+      (i === 0 || !isIdentChar(source[i - 1])) &&
+      !isIdentChar(source[i + kind.length])
     ) {
-      state = "code";
+      i += kind.length;
+      while (/\s/.test(source[i])) i += 1;
+      if (source[i] !== "(") continue;
+      i += 1;
+      while (/\s/.test(source[i])) i += 1;
+      const q = source[i];
+      if (q !== '"' && q !== "'" && q !== "`") continue;
+      i += 1;
+      let title = "";
+      while (i < source.length && source[i] !== q) {
+        if (source[i] === "\\") {
+          title += source[i + 1] ?? "";
+          i += 2;
+          continue;
+        }
+        title += source[i];
+        i += 1;
+      }
+      i += 1;
+      const after = source.slice(i, i + 120);
+      calls.push({
+        title,
+        skipTrue: /,\s*\{\s*skip\s*:\s*true\b/.test(after),
+      });
+      continue;
     }
     i += 1;
   }
-  return out;
+  return calls;
 }
 
 function hasEarningTest(fileText, title) {
-  const source = stripTsComments(fileText);
-  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (
-    new RegExp(String.raw`(?:test|vmTest)\(\s*["\`]${escaped}["\`]`).test(
-      source,
-    )
-  ) {
-    return true;
-  }
-  return new RegExp(
-    String.raw`\[[^\]]{0,240}["\`]${escaped}["\`][^\]]{0,80}\][\s\S]{0,400}(?:test|vmTest)\(\s*name\b`,
-  ).test(source);
+  return earningTestCalls(fileText).some(
+    (call) => call.title === title && !call.skipTrue,
+  );
 }
 
 export function checkVerifyEvidence({
@@ -365,7 +388,7 @@ export async function checkSoftPassRejected({
     ];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (!/unknown/.test(message)) {
+    if (!/status is unknown/.test(message)) {
       return [
         `Soft-PASS must fail as an unknown qualification status, not: ${message}`,
       ];

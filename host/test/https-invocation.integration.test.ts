@@ -13,24 +13,32 @@ const helper = fileURLToPath(
   new URL("./helpers/https-vm-smoke.ts", import.meta.url),
 );
 
-for (const [mode, name] of [
-  ["success", "one-shot HTTPS VM public TLS GET/HEAD development evidence"],
-  [
-    "bounds",
-    "one-shot HTTPS VM enforces decoded response and request deadline bounds",
-  ],
-]) {
-  test(name, { skip, timeout: 120000 }, async () => {
-    // Node test workers synthesize TLS flags in execArgv. Start a plain Node
-    // process with its normal default trust, inheriting all environment values.
-    // The production preflight remains unchanged and rejects unsafe env options.
-    const result = await run(process.execPath, [helper, mode], {
-      timeout: 110000,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    assert.match(result.stdout, new RegExp(`HTTPS VM ${mode}: PASS`));
+async function runHttpsMode(mode) {
+  // Node test workers synthesize TLS flags in execArgv. Start a plain Node
+  // process with its normal default trust, inheriting all environment values.
+  // The production preflight remains unchanged and rejects unsafe env options.
+  const result = await run(process.execPath, [helper, mode], {
+    timeout: 110000,
+    maxBuffer: 2 * 1024 * 1024,
   });
+  assert.match(result.stdout, new RegExp(`HTTPS VM ${mode}: PASS`));
 }
+
+test(
+  "one-shot HTTPS VM public TLS GET/HEAD development evidence",
+  { skip, timeout: 120000 },
+  async () => {
+    await runHttpsMode("success");
+  },
+);
+
+test(
+  "one-shot HTTPS VM enforces decoded response and request deadline bounds",
+  { skip, timeout: 120000 },
+  async () => {
+    await runHttpsMode("bounds");
+  },
+);
 
 // CI always registers skip:false. Missing acceleration, curl, network, TLS, or
 // QEMU fails the helper.

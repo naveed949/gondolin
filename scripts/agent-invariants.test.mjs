@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -57,7 +58,7 @@ test("evaluateDoctorProof requires a ready doctor for this package version", () 
   );
   assert.equal(
     evaluateDoctorProof("status=ready\n", version).reason,
-    "missing-doctor",
+    "missing-package-version",
   );
   assert.equal(
     evaluateDoctorProof(
@@ -272,7 +273,7 @@ test("an unused title next to test(name) is not enough to advertise", async () =
     const title = EARNED_ACTIVE_PROFILES["https-request"].requiredText;
     write(
       path.join(root, rel),
-      `const leftover = "${title}";\ntest(name, () => {});\n`,
+      `const leftover = ["${title}"];\ntest(name, () => {});\n`,
     );
     const errors = await checkAdvertisedProfiles({
       manifest: { profiles: { "https-request": "active" } },
@@ -280,6 +281,34 @@ test("an unused title next to test(name) is not enough to advertise", async () =
     });
     assert.equal(errors.length, 1);
     assert.match(errors[0], /HTTPS VM public TLS/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a skipped or string-wrapped earning title is not enough to advertise", async () => {
+  const root = tempDir("gondolin-skip-wrap-");
+  try {
+    const rel = EARNED_ACTIVE_PROFILES["exact-reader"].files[0];
+    const title = EARNED_ACTIVE_PROFILES["exact-reader"].requiredText;
+    write(
+      path.join(root, rel),
+      `test("${title}", { skip: true }, async () => {});\n`,
+    );
+    const skipped = await checkAdvertisedProfiles({
+      manifest: { profiles: { "exact-reader": "active" } },
+      root,
+    });
+    assert.equal(skipped.length, 1);
+    write(
+      path.join(root, rel),
+      "const x = `vmTest(\"" + title + "\", async () => {})`;\n",
+    );
+    const wrapped = await checkAdvertisedProfiles({
+      manifest: { profiles: { "exact-reader": "active" } },
+      root,
+    });
+    assert.equal(wrapped.length, 1);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -295,4 +324,49 @@ test("a checker crash is not recorded as missing-doctor", () => {
   for (const reason of DOCTOR_FAIL_REASONS) {
     assert.equal(classifyDoctorProofFailure(`${reason}\n`), reason);
   }
+});
+
+test("doctor-proof CLI writes the shared fail reasons", () => {
+  const bin = path.join(repoRoot, "scripts/agent-invariants.mjs");
+  const run = (file) =>
+    spawnSync(process.execPath, [bin, "doctor-proof", file], {
+      encoding: "utf8",
+      cwd: repoRoot,
+    });
+  const missing = run(path.join(os.tmpdir(), "gondolin-no-doctor.txt"));
+  assert.equal(missing.status, 1);
+  assert.equal(missing.stdout.trim(), "missing-doctor");
+  const dir = tempDir("gondolin-doctor-cli-");
+  try {
+    const ready = path.join(dir, "ready.txt");
+    write(
+      ready,
+      `status=ready\npackage_version=${packageVersion()}\n`,
+    );
+    const ok = run(ready);
+    assert.equal(ok.status, 0);
+    const refuse = path.join(dir, "refuse.txt");
+    write(refuse, `status=refuse\npackage_version=${packageVersion()}\n`);
+    assert.equal(run(refuse).stdout.trim(), "doctor-not-ready");
+    const noVersion = path.join(dir, "no-version.txt");
+    write(noVersion, "status=ready\n");
+    assert.equal(run(noVersion).stdout.trim(), "missing-package-version");
+    const stale = path.join(dir, "stale.txt");
+    write(stale, "status=ready\npackage_version=0.12.1-adaptivesandbox.10\n");
+    assert.equal(run(stale).stdout.trim(), "stale-package-version");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the helper fail-closed path calls doctor-proof", () => {
+  const helper = fs.readFileSync(
+    path.join(
+      repoRoot,
+      ".cursor/skills/verify-gondolin/helpers/drive-cli-exec.sh",
+    ),
+    "utf8",
+  );
+  assert.match(helper, /scripts\/agent-invariants\.mjs" doctor-proof/);
+  assert.match(helper, /doctor-proof-failed/);
 });
