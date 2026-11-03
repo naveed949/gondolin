@@ -5,20 +5,20 @@ alwaysApply: true
 # pstack model configuration. One line per role. Delete a line to fall back to the skill default.
 # `inherit-parent` or `auto` as a value: the role runs on the parent chat model (omit Task `model`). Alias entries in a panel list still count toward its fan-out.
 # budget: medium (high)
-feature, refactoring: grok-4.7-high-fast
-bug-fix: grok-4.7-high-fast
-perf-issue: grok-4.7-high-fast
-hillclimb: grok-4.7-high-fast
+feature, refactoring: grok-4.7-high
+bug-fix: grok-4.7-high
+perf-issue: grok-4.7-high
+hillclimb: grok-4.7-high
 judgment and prose: claude-opus-5-5-high
 hardest tasks: claude-opus-5-5-high
-how explorer: grok-4.7-high-fast
+how explorer: grok-4.7-high
 how explainer: claude-opus-5-5-high
-why investigators: grok-4.7-high-fast
+why investigators: grok-4.7-high
 why synthesizer: claude-opus-5-5-high
 reflect tooling: gpt-5.6-sol-high
 reflect judgment, divergent, synthesizer: claude-opus-5-5-high
-arena runners: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high-fast
-arena cross-judge pool: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high-fast
-swarm workers: grok-4.7-high-fast
-architect runners: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high-fast
-interrogate reviewers: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high-fast
+arena runners: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high
+arena cross-judge pool: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high
+swarm workers: grok-4.7-high
+architect runners: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high
+interrogate reviewers: claude-opus-5-5-high, gpt-5.6-sol-high, grok-4.7-high
